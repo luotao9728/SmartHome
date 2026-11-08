@@ -737,9 +737,18 @@ def _register_ui(app: FastAPI, state: AppState) -> None:
 
     @app.get("/healthz")
     async def healthz() -> Any:
+        # ``build`` is the newest mtime among the served UI files: comparing it
+        # with `git log -1` on the checkout is the quickest way to tell whether
+        # a deploy actually reached /opt/smarthome.
+        try:
+            build = max(int(p.stat().st_mtime)
+                        for p in WEB_DIR.iterdir() if p.is_file())
+        except (OSError, ValueError):
+            build = 0
         return {
             "ok": True,
             "version": __version__,
+            "build": build,
             "uptime_s": round(time.time() - state.started, 1),
             "nodes_online": sum(1 for n in state.hub.list_nodes() if n["online"]),
             "devices": len(state.store.list_devices()),
@@ -780,7 +789,22 @@ def _register_ui(app: FastAPI, state: AppState) -> None:
             except Exception:  # noqa: BLE001
                 pass
 
-    app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
+    class RevalidatingStatic(StaticFiles):
+        """Static files that the browser must revalidate on every load.
+
+        Plain StaticFiles sends no Cache-Control, so browsers apply heuristic
+        caching -- an updated app.css kept being served from cache after an
+        upgrade, which made UI fixes look like they did nothing.  no-cache still
+        allows a conditional request, so unchanged files answer 304 and cost
+        almost nothing.
+        """
+
+        async def get_response(self, path: str, scope: Any) -> Response:
+            response = await super().get_response(path, scope)
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return response
+
+    app.mount("/static", RevalidatingStatic(directory=str(WEB_DIR)), name="static")
 
 
 def _ui_frame(payload: Dict[str, Any]) -> Dict[str, Any]:
