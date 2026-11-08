@@ -358,3 +358,78 @@ def test_set_state_only_reports_changes():
     assert device.snapshot()["power"] is True
     device.set_state({"power": True})  # no change, no error
     assert device.snapshot()["power"] is True
+
+
+# --------------------------------------------------------------------------- #
+# calibration and smoothing (matches the standalone Pico LED controller)
+# --------------------------------------------------------------------------- #
+def test_min_duty_raises_the_floor_without_lighting_at_zero():
+    """A strip that only responds above ~9 % duty can be calibrated to it."""
+    ceiling = int(65535 * 30 / 100)
+    floor = int(round(65535 * 9.0 / 100))
+    table = gamma_lut(1.40, ceiling, floor)
+    assert table[0] == 0, "0 % must be fully off, not the floor"
+    assert table[1] >= floor, "1 % should land at the minimum duty"
+    assert table[100] == ceiling
+    assert all(a <= b for a, b in zip(table, table[1:]))
+
+
+def test_calibration_matches_the_standalone_controller():
+    """The same numbers the user runs by hand must give the same duty table."""
+    min_duty, max_duty_percent, curve = 9.0, 30.0, 1.40
+    ceiling = int(65535 * max_duty_percent / 100)
+    floor = int(round(65535 * min_duty / 100))
+    table = gamma_lut(curve, ceiling, floor)
+
+    def reference(percent):
+        if percent <= 0:
+            return 0
+        corrected = (percent / 100.0) ** curve
+        duty_percent = min_duty + corrected * (max_duty_percent - min_duty)
+        return int(duty_percent / 100.0 * 65535)
+
+    for percent in range(101):
+        assert abs(table[percent] - reference(percent)) <= 1, (
+            "%d %%: %d vs %d" % (percent, table[percent], reference(percent))
+        )
+
+
+def test_min_duty_is_clamped_to_max_duty():
+    strip = make_strip(min_duty=80, max_duty=40)
+    assert strip.min_duty_percent <= strip.max_duty_percent
+
+
+def test_smoothing_fade_reaches_the_target_without_overshoot():
+    async def scenario():
+        strip = PwmLedStrip("strip-s", {
+            "pin": 4, "min_duty": 9.0, "max_duty": 30, "gamma": 1.40,
+            "smoothing": 0.18, "update_interval_ms": 1,
+        })
+        strip.setup()
+        strip.apply({"power": True, "brightness": 100})
+        target = strip._target_duty
+        assert target > 0
+
+        samples = []
+        for _ in range(800):
+            await asyncio.sleep(0.001)
+            samples.append(strip._current_duty)
+            if strip._current_duty == target:
+                break
+
+        assert strip._current_duty == target, "the fade must settle on the target"
+        assert all(b >= a for a, b in zip(samples, samples[1:])), "no backtracking"
+        assert max(samples) <= target, "must not overshoot"
+        # Easing, not a straight ramp: the first step is a fraction of the gap.
+        assert samples[0] < target * 0.5
+
+    asyncio.run(scenario())
+
+
+def test_zero_smoothing_keeps_the_linear_fade():
+    strip = make_strip(smoothing=0)
+    assert strip._smoothing == 0.0
+    # fade_ms still governs timing.
+    strip._fade_ms = 0
+    strip.apply({"power": True, "brightness": 50})
+    assert strip._current_duty == strip._table[50]

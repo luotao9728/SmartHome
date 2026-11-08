@@ -21,13 +21,21 @@ from .base import Driver, make_pwm
 MAX_DUTY = 65535
 
 
-def gamma_lut(exponent: float, max_duty: int = MAX_DUTY) -> list:
-    """Pre-computed 0..100 % -> duty table (MicroPython has no ``pow`` speed-up)."""
+def gamma_lut(exponent: float, max_duty: int = MAX_DUTY, min_duty: int = 0) -> list:
+    """Pre-computed 0..100 % -> duty table (MicroPython has no ``pow`` speed-up).
+
+    Below 1 % the output is 0 (fully off).  Above it the curve maps the whole
+    range onto ``min_duty..max_duty``, which is how a strip that only responds
+    between, say, 9 % and 30 % duty can still use a 0-100 % slider.
+    """
     table = []
     for percent in range(101):
+        if percent <= 0:
+            table.append(0)
+            continue
         ratio = percent / 100.0
         value = ratio if exponent == 1.0 else ratio ** exponent
-        table.append(int(round(value * max_duty)))
+        table.append(int(round(min_duty + value * (max_duty - min_duty))))
     return table
 
 
@@ -44,16 +52,29 @@ class PwmLedStrip(Driver):
         self.pin = int(self.config.get("pin", 4))
         self.active_low = bool(self.config.get("active_low", False))
         self.max_duty_percent = max(1, min(100, int(self.config.get("max_duty", 100))))
+        # A strip that only lights up above a threshold (and saturates early)
+        # is calibrated with min_duty/max_duty instead of the full 0-100 % range.
+        self.min_duty_percent = float(self.config.get("min_duty", 0.0))
+        self.min_duty_percent = max(0.0, min(float(self.max_duty_percent),
+                                             self.min_duty_percent))
         self.gamma = float(self.config.get("gamma", 2.2))
         if self.gamma < 0.5:
             self.gamma = 0.5
-        self._table = gamma_lut(self.gamma, int(MAX_DUTY * self.max_duty_percent / 100))
+        ceiling = int(MAX_DUTY * self.max_duty_percent / 100)
+        floor = int(round(MAX_DUTY * self.min_duty_percent / 100))
+        self._ceiling = ceiling
+        self._table = gamma_lut(self.gamma, ceiling, min(floor, ceiling))
         self._pwm = None
         self._frequency = int(self.config.get("frequency_hz", 1000))
         self._fade_task = None
         self._current_duty = 0
         self._target_duty = 0
         self._fade_ms = 400
+        #: Exponential smoothing factor per tick (0..1).  0 means "use the
+        #: linear fade", which is what fade_ms alone expresses.
+        self._smoothing = max(0.0, min(1.0, float(self.config.get("smoothing", 0.0))))
+        self._interval_ms = int(self.config.get("update_interval_ms", 16) or 16)
+        self._interval_ms = max(2, min(200, self._interval_ms))
         self.state = {
             "power": False,
             "brightness": 100,
@@ -89,9 +110,9 @@ class PwmLedStrip(Driver):
         return self._table[percent]
 
     def _raw_duty(self, duty: int) -> int:
-        duty = max(0, min(int(MAX_DUTY * self.max_duty_percent / 100), int(duty)))
+        duty = max(0, min(self._ceiling, int(duty)))
         if self.active_low:
-            return int(MAX_DUTY * self.max_duty_percent / 100) - duty
+            return self._ceiling - duty
         return duty
 
     def _write_duty(self, duty: int) -> None:
@@ -151,6 +172,9 @@ class PwmLedStrip(Driver):
         self._fade_task = self.spawn(self._fade(target, duration))
 
     async def _fade(self, target: int, duration_ms: int) -> None:
+        if self._smoothing > 0:
+            await self._fade_exponential(target)
+            return
         start = self._current_duty
         delta = target - start
         if delta == 0:
@@ -162,6 +186,33 @@ class PwmLedStrip(Driver):
                 value = int(start + delta * step / steps)
                 self._write_duty(value)
                 await sleep_ms(step_ms)
+            self._write_duty(target)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            self.log("fade error: %r" % (exc,))
+
+    async def _fade_exponential(self, target: int) -> None:
+        """Ease toward the target by a fixed fraction every tick.
+
+        This is the ``current += (target - current) * SMOOTHING`` loop: it
+        settles smoothly and never overshoots, and the tail is imperceptible,
+        so it snaps to the target once the remainder is under one duty step.
+        """
+        factor = self._smoothing
+        interval = self._interval_ms
+        try:
+            while True:
+                difference = target - self._current_duty
+                if abs(difference) < 1:
+                    break
+                value = int(round(self._current_duty + difference * factor))
+                # Guarantee progress: with a small factor the int() rounding
+                # could stall forever just below the target.
+                if value == self._current_duty:
+                    value = self._current_duty + (1 if difference > 0 else -1)
+                self._write_duty(value)
+                await sleep_ms(interval)
             self._write_duty(target)
         except asyncio.CancelledError:
             raise
