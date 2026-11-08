@@ -160,13 +160,12 @@ code { font-family: var(--mono); font-size: .88em; background: var(--bg-sunken);
 
 .toolbar { display: flex; align-items: center; gap: 8px; flex: none; }
 
-/* The "Add device" label is a <span> (see index.html) so it can be hidden and
-   the button reduced to its "+" icon when the top bar runs out of room. */
-#btn-add span {
-  display: inline-block;
-  max-width: 12ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* "Add device" is always shown as just its "+" icon: the top bar is too tight
+   for words on a phone, and the title/aria-label carry the meaning. */
+.btn.icon-only {
+  width: 40px;
+  padding: 0;
+  flex: none;
 }
 
 main {
@@ -825,23 +824,6 @@ input[type="color"]::-moz-color-swatch { border: 0; border-radius: 6px; }
 }
 
 /* ------------------------------------------------------------ responsive -- */
-
-/* Collapse "Add device" to just "+" whenever the top bar is too narrow to fit
-   the words.  A container query reacts to the space actually available (a long
-   hub title or a wide phone in portrait both matter), whereas a viewport media
-   query only knows the screen width.  The @media fallback below covers browsers
-   without container query support. */
-.topbar { container-type: inline-size; container-name: topbar; }
-
-@container topbar (max-width: 460px) {
-  #btn-add span { display: none; }
-  #btn-add { padding: 0; width: 40px; flex: none; }
-}
-
-@container topbar (min-width: 461px) {
-  #btn-add span { display: inline-block; }
-}
-
 @media (max-width: 640px) {
   :root { --gap: 12px; }
   .brand-text h1 { font-size: 16px; }
@@ -850,14 +832,6 @@ input[type="color"]::-moz-color-swatch { border: 0; border-radius: 6px; }
   .stat { padding: 7px 12px; }
   .field-row { grid-template-columns: 1fr; }
   main { padding-bottom: 110px; }
-}
-
-/* Fallback for browsers without container queries. */
-@supports not (container-type: inline-size) {
-  @media (max-width: 460px) {
-    #btn-add span { display: none; }
-    #btn-add { padding: 0; width: 40px; flex: none; }
-  }
 }
 
 @media (min-width: 1000px) {
