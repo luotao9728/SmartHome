@@ -475,9 +475,9 @@ def _register_api(app: FastAPI, state: AppState) -> None:
 
     @app.delete("/api/nodes/{node_id}")
     async def delete_node(node_id: str, request: Request) -> Any:
-        _require_login(state, request)
-        await asyncio.to_thread(state.hub.delete_node, node_id)
+        _require_admin(state, request)
         state.auth.revoke(node_id)
+        await state.hub.forget_node(node_id)
         return {"ok": True}
 
     @app.post("/api/enroll")

@@ -941,7 +941,19 @@ class Hub:
         for uid in [d["uid"] for d in self.store.devices_for_node(node_id)]:
             self.store.update_device(uid, node_id=None)
         self.store.delete_node(node_id)
+        # Drop the live session as well.  snapshot() lists live sessions first,
+        # so without this the node stayed on screen (and kept heartbeating)
+        # even though its row was gone -- "Forget" appeared to do nothing.
+        self._sessions.pop(node_id, None)
         self._broadcast_nodes()
+
+    async def forget_node(self, node_id: str) -> None:
+        """Forget a node: remove it, close its socket and revoke access."""
+        session = self._sessions.get(node_id)
+        self.delete_node(node_id)
+        if session is not None:
+            await self._end_session(session)
+        self.store.add_event("node_forgotten", name=node_id)
 
     # ------------------------------------------------------------------ #
     # background tasks
