@@ -67,6 +67,44 @@ def default_data_dir() -> Path:
     return Path.home() / ".smarthome"
 
 
+#: Where a system-wide (packaged / systemd) install keeps its data.  Checked so
+#: that ``set-password`` and friends edit the file the *service* reads even when
+#: they are run without the unit's environment (e.g. `sudo -u smarthome`).
+SYSTEM_DATA_DIR = Path("/var/lib/smarthome")
+
+
+def discover_config_path() -> Path:
+    """Locate the configuration the running hub actually uses.
+
+    Resolution order:
+
+    1. ``$SMARTHOME_CONFIG`` - explicit, always wins.
+    2. ``<SMARTHOME_DATA_DIR>/config.json`` when that variable is set.
+    3. ``/var/lib/smarthome/config.json`` when it exists (a systemd install).
+    4. ``~/.smarthome/config.json`` - the per-user default.
+
+    Without step 3 a maintenance command run by hand would quietly write to the
+    invoking user's home directory while the service kept reading its own file,
+    which makes ``set-password`` appear to do nothing.
+    """
+    explicit = os.environ.get("SMARTHOME_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+
+    data_env = os.environ.get("SMARTHOME_DATA_DIR")
+    if data_env:
+        return Path(data_env).expanduser() / "config.json"
+
+    system_config = SYSTEM_DATA_DIR / "config.json"
+    try:
+        if system_config.is_file():
+            return system_config
+    except OSError:
+        pass
+
+    return Path.home() / ".smarthome" / "config.json"
+
+
 def _deep_merge(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
     result = copy.deepcopy(base)
     for key, value in (overlay or {}).items():
@@ -118,8 +156,7 @@ class Config:
         create: bool = True,
         bootstrap_password: bool = True,
     ) -> "Config":
-        env_path = os.environ.get("SMARTHOME_CONFIG")
-        config_path = Path(path or env_path or (default_data_dir() / "config.json")).expanduser()
+        config_path = Path(path).expanduser() if path else discover_config_path()
         data_dir = config_path.parent
         if bundled_types_dir is None:
             bundled_types_dir = Path(__file__).resolve().parent.parent / "device_types"

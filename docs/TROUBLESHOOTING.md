@@ -61,8 +61,17 @@ its devices simply do not appear.
 
 ## Login problems
 
-* Forgot the password:
-  `sudo -u smarthome /opt/smarthome/.venv/bin/python -m smarthome set-password`
+* Forgot the password — easiest is the web UI (**Settings → Account**), or:
+  ```bash
+  sudo SMARTHOME_CONFIG=/var/lib/smarthome/config.json \
+       /opt/smarthome/.venv/bin/python -m smarthome set-password
+  ```
+  `SMARTHOME_CONFIG` is not optional here.  The systemd unit sets it for the
+  service, but a command you type in your shell does not inherit it — without
+  it the CLI edits `~/.smarthome/config.json` and prints success while the
+  service keeps its old password.  (Current versions also find
+  `/var/lib/smarthome/config.json` automatically and warn when they disagree
+  with the running service, but older checkouts do not.)
 * Locked out ("too many attempts"): wait `login_lockout_s` (60 s by default).
 * Cookie not sticking over a reverse proxy: serve HTTPS and set
   `auth.cookie_secure: true` in `config.json`, and make sure the proxy passes

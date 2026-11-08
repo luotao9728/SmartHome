@@ -22,6 +22,7 @@ import logging
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -103,6 +104,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _running_service_config() -> Optional[Path]:
+    """Config file the smart*home systemd unit uses, if we can tell."""
+    try:
+        completed = subprocess.run(
+            ["systemctl", "show", "smarthome.service", "--property=Environment"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    for token in completed.stdout.split():
+        if token.startswith("SMARTHOME_CONFIG="):
+            value = token.split("=", 1)[1].strip().strip('"')
+            return Path(value) if value else None
+    return None
+
+
 def cmd_set_password(args: argparse.Namespace) -> int:
     config = _config(args)
     password = args.password
@@ -113,12 +132,31 @@ def cmd_set_password(args: argparse.Namespace) -> int:
             print("passwords do not match", file=sys.stderr)
             return 1
         password = first
+
+    # Guard against the classic footgun: writing the hash to a config the
+    # service never reads (it keeps the old password, so nothing seems to
+    # happen).  Only a warning -- there are legitimate reasons for a split.
+    service_config = _running_service_config()
+    if service_config is not None and service_config != config.path:
+        print("warning: the running service uses %s" % service_config, file=sys.stderr)
+        print("         but this command is about to edit %s" % config.path, file=sys.stderr)
+        print("         Re-run with --config %s to change the service's password."
+              % service_config, file=sys.stderr)
+
     try:
         config.set_admin_password(password)
     except ValueError as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
+    except OSError as exc:
+        print("error: cannot write %s: %s" % (config.path, exc), file=sys.stderr)
+        if os.geteuid() != 0 if hasattr(os, "geteuid") else False:
+            print("hint: try again with sudo", file=sys.stderr)
+        return 1
+
     print("password updated in %s" % config.path)
+    if service_config is not None and service_config == config.path:
+        print("the running service reads this file; no restart needed")
     return 0
 
 

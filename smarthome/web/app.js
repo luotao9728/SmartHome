@@ -1246,6 +1246,7 @@ function paintSettingsDialog() {
       <button role="tab" aria-selected="true" data-tab="network">Network</button>
       <button role="tab" aria-selected="false" data-tab="nodes">Nodes</button>
       <button role="tab" aria-selected="false" data-tab="types">Device types</button>
+      <button role="tab" aria-selected="false" data-tab="account">Account</button>
     </div>
     <section data-panel="network">
       <div class="field-row">
@@ -1307,6 +1308,26 @@ function paintSettingsDialog() {
               <span class="muted" style="font-size:12px">${escapeHtml(type.description || '')}</span></div></div>`).join('')}
       </div>
       <p class="hint">Drop a new JSON manifest into <code>device_types/</code> on the Pi, then press reload.</p>
+    </section>
+    <section data-panel="account" hidden>
+      <div data-password-form>
+        <label class="field"><span>Current password</span>
+          <input type="password" data-password="current" autocomplete="current-password">
+        </label>
+        <div class="field-row">
+          <label class="field"><span>New password</span>
+            <input type="password" data-password="new" autocomplete="new-password" minlength="8">
+            <span class="hint">At least 8 characters.</span>
+          </label>
+          <label class="field"><span>Repeat new password</span>
+            <input type="password" data-password="confirm" autocomplete="new-password" minlength="8">
+          </label>
+        </div>
+        <p class="error" data-password-error hidden></p>
+        <button type="button" class="btn primary" data-password-submit>Change password</button>
+      </div>
+      <p class="hint">You will stay signed in on this device. Other browsers keep their
+        existing sessions until they expire.</p>
     </section>`;
   wireSettingsDialog(body);
 }
@@ -1317,6 +1338,21 @@ function wireSettingsDialog(body) {
       for (const other of $$('[data-tab]', body)) other.setAttribute('aria-selected', String(other === tab));
       for (const panel of $$('[data-panel]', body)) panel.hidden = panel.dataset.panel !== tab.dataset.tab;
     });
+  }
+
+  const passwordForm = $('[data-password-form]', body);
+  if (passwordForm) {
+    const submit = $('[data-password-submit]', passwordForm);
+    if (submit) submit.addEventListener('click', () => submitPasswordChange(passwordForm));
+    // Enter in any field submits too.
+    for (const input of $$('input', passwordForm)) {
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitPasswordChange(passwordForm);
+        }
+      });
+    }
   }
   const enrollButton = $('[data-enroll]', body);
   if (enrollButton) {
@@ -1367,6 +1403,38 @@ function wireSettingsDialog(body) {
         showToast('Device types reloaded', 'ok');
       } catch (error) { showToast(error.message, 'error'); }
     });
+  }
+}
+
+async function submitPasswordChange(form) {
+  const current = $('[data-password="current"]', form).value;
+  const next = $('[data-password="new"]', form).value;
+  const confirm = $('[data-password="confirm"]', form).value;
+  const error = $('[data-password-error]', form);
+  const submit = $('[data-password-submit]', form);
+
+  const fail = (message) => {
+    error.textContent = message;
+    error.hidden = false;
+  };
+  error.hidden = true;
+
+  if (next.length < 8) return fail('The new password must be at least 8 characters.');
+  if (next !== confirm) return fail('The two new passwords do not match.');
+  if (next === current) return fail('The new password is the same as the current one.');
+
+  submit.disabled = true;
+  submit.textContent = 'Changing…';
+  try {
+    await api('/api/password', { method: 'POST', body: { current, new: next } });
+    form.reset();
+    closeDialog();
+    showToast('Password changed', 'ok');
+  } catch (err) {
+    fail(err.message);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = 'Change password';
   }
 }
 

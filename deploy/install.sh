@@ -158,6 +158,13 @@ Next steps:
        sudo systemctl status smarthome
        sudo journalctl -u smarthome -f
        sudo -u $SERVICE_USER $APP_DIR/.venv/bin/python -m smarthome info
-       sudo -u $SERVICE_USER $APP_DIR/.venv/bin/python -m smarthome set-password
+
+  Change the admin password either in the web UI (Settings -> Account) or:
+
+       sudo SMARTHOME_CONFIG=$DATA_DIR/config.json \\
+         $APP_DIR/.venv/bin/python -m smarthome set-password
+
+  SMARTHOME_CONFIG matters: without it the command edits your own
+  ~/.smarthome/config.json and the service keeps its old password.
 
 EOF
