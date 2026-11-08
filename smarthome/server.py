@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,7 +49,7 @@ from .config import Config
 from .hub import UNSET, DeviceError, Hub, OfflineNode, UnknownDevice
 from .nodes import NodeAuth
 from .registry import ManifestError, TypeRegistry
-from .store import Store
+from .store import ROLE_ADMIN, ROLE_USER, ROLES, Store
 from .ws import WebSocketTransport
 
 LOG = logging.getLogger(__name__)
@@ -114,20 +115,62 @@ class AppState:
         self.login_failures.setdefault(client, []).append(time.time())
 
 
-def _is_logged_in(state: AppState, request: Request) -> bool:
+def _session_user(state: AppState, request: Request) -> Optional[Dict[str, Any]]:
+    """The signed-in user for this request, or ``None``.
+
+    Credentials live in the database, not in config.json, so a password change
+    takes effect immediately for every request without restarting the service.
+    The cookie carries the user's ``updated`` stamp; if it moved on (a password
+    or role change) the session is treated as stale.
+    """
     cookie = request.cookies.get(SESSION_COOKIE)
-    if cookie and security.verify_session(cookie, state.config.session_secret()):
-        return True
+    if not cookie:
+        return None
+    payload = security.verify_session(cookie, state.config.session_secret())
+    if not payload:
+        return None
+    username = payload.get("sub")
+    if not isinstance(username, str) or not username:
+        return None
+    user = state.store.get_user(username)
+    if user is None:
+        return None                      # deleted
+    issued = payload.get("ver", 0)
+    try:
+        issued = float(issued)
+    except (TypeError, ValueError):
+        return None
+    if issued != float(user.get("updated") or 0):
+        return None                      # password or role changed
+    return user
+
+
+def _api_key_ok(state: AppState, request: Request) -> bool:
     key = request.headers.get("x-api-key") or request.query_params.get("key")
+    if not key:
+        return False
     api_key = state.config.api_key()
-    if key and api_key and security.safe_compare(key, api_key):
-        return True
-    return False
+    return bool(api_key and security.safe_compare(key, api_key))
 
 
-def _require_login(state: AppState, request: Request) -> None:
-    if not _is_logged_in(state, request):
-        raise ApiError(401, "authentication required")
+def _is_logged_in(state: AppState, request: Request) -> bool:
+    return _session_user(state, request) is not None or _api_key_ok(state, request)
+
+
+def _require_login(state: AppState, request: Request) -> Optional[Dict[str, Any]]:
+    user = _session_user(state, request)
+    if user is not None:
+        return user
+    if _api_key_ok(state, request):
+        return {"username": "api-key", "role": ROLE_ADMIN, "display_name": "API key"}
+    raise ApiError(401, "authentication required")
+
+
+def _require_admin(state: AppState, request: Request) -> Dict[str, Any]:
+    user = _require_login(state, request)
+    if user is None or user.get("role") != ROLE_ADMIN:
+        raise ApiError(403, "administrator access required")
+    return user
 
 
 async def _json_body(request: Request) -> Dict[str, Any]:
@@ -164,13 +207,17 @@ def _cookie_response(payload: Dict[str, Any], state: AppState, cookie: Optional[
 # App factory
 # --------------------------------------------------------------------------- #
 def create_app(config_path: Optional[str] = None) -> FastAPI:
-    config = Config.load(config_path)
+    # bootstrap_password=False: with a user database, generating a throwaway
+    # password in config.json is pointless, and it would auto-create an admin
+    # that blocks first-run setup.
+    config = Config.load(config_path, bootstrap_password=False)
     store = Store(config.db_path)
     registry = TypeRegistry(config.device_types_dirs)
     registry.reload()
     hub = Hub(config, store, registry)
     auth = NodeAuth(store, require_tokens=bool(config.auth.get("require_node_tokens", True)))
     state = AppState(config, store, registry, hub, auth)
+    _bootstrap_users(config, store)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -195,6 +242,27 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     _register_ui(app, state)
     _register_node_ws(app, state)
     return app
+
+
+def _bootstrap_users(config: Config, store: Store) -> None:
+    """Create the first administrator from the legacy config, once.
+
+    Earlier versions kept a single admin password in config.json.  If the
+    database has no users yet, carry that hash over so existing installs keep
+    working, and record which account it was.
+    """
+    if store.count_users() > 0:
+        return
+    legacy_hash = (config.auth.get("password_hash") or "").strip()
+    if not legacy_hash:
+        return
+    try:
+        store.create_user("admin", legacy_hash, role=ROLE_ADMIN, display_name="Administrator")
+    except Exception:  # noqa: BLE001 - a concurrent start may have won
+        if store.count_users() == 0:
+            raise
+        return
+    LOG.info("migrated the legacy admin password into the user database")
 
 
 def _bootstrap_banner(config: Config) -> None:
@@ -230,15 +298,41 @@ def _register_api(app: FastAPI, state: AppState) -> None:
         if not isinstance(password, str) or not password:
             state.note_login_failure(client)
             raise ApiError(400, "password is required")
-        if not security.verify_password(password, state.config.auth["password_hash"]):
+        username = body.get("username")
+        if not isinstance(username, str) or not username.strip():
+            # Single-user convenience: with exactly one account, "password" is
+            # enough.  With several, the username is required.
+            users = state.store.list_users()
+            if len(users) == 1:
+                username = users[0]["username"]
+            else:
+                state.note_login_failure(client)
+                raise ApiError(400, "username is required")
+        username = username.strip()
+        user = state.store.get_user(username)
+        if user is None:
+            # Hash anyway so an unknown user costs the same as a wrong password.
+            security.verify_password(password, security.hash_password("dummy-password-for-timing"))
             state.note_login_failure(client)
             await asyncio.sleep(0.25)
-            raise ApiError(401, "wrong password")
+            raise ApiError(401, "wrong username or password")
+        if not security.verify_password(password, user["password_hash"]):
+            state.note_login_failure(client)
+            await asyncio.sleep(0.25)
+            raise ApiError(401, "wrong username or password")
         state.login_failures.pop(client, None)
+        await asyncio.to_thread(state.store.touch_login, username)
         cookie = security.new_session_cookie(
-            state.config.session_secret(), int(state.config.auth.get("session_ttl_hours", 336))
+            state.config.session_secret(),
+            int(state.config.auth.get("session_ttl_hours", 336)),
+            subject=username,
+            role=user.get("role", ROLE_USER),
+            version=float(user.get("updated") or 0),
         )
-        return _cookie_response({"ok": True}, state, cookie)
+        return _cookie_response(
+            {"ok": True, "user": {"username": username, "role": user.get("role", ROLE_USER)}},
+            state, cookie,
+        )
 
     @app.post("/api/logout")
     async def logout() -> Response:
@@ -248,12 +342,20 @@ def _register_api(app: FastAPI, state: AppState) -> None:
 
     @app.get("/api/me")
     async def me(request: Request) -> Any:
-        logged_in = _is_logged_in(state, request)
+        user = _session_user(state, request)
+        authenticated = user is not None or _api_key_ok(state, request)
+        if user is None and authenticated:
+            user = {"username": "api-key", "role": ROLE_ADMIN, "display_name": "API key"}
         return {
-            "authenticated": logged_in,
+            "authenticated": authenticated,
             "title": state.config.ui.get("title", "SmartHome"),
             "version": __version__,
-            "bootstrap": not state.config.generated_password and not state.config.auth.get("password_hash"),
+            "needs_setup": state.store.count_users() == 0,
+            "user": None if user is None else {
+                "username": user.get("username"),
+                "role": user.get("role", ROLE_USER),
+                "display_name": user.get("display_name", ""),
+            },
         }
 
     @app.get("/api/bootstrap")
@@ -418,18 +520,169 @@ def _register_api(app: FastAPI, state: AppState) -> None:
 
     @app.post("/api/password")
     async def change_password(request: Request) -> Any:
-        _require_login(state, request)
+        """Change the signed-in user's own password.
+
+        Writes to the database, so the new password is live on the next request
+        without restarting anything.
+        """
+        user = _require_login(state, request)
         body = await _json_body(request)
         new = body.get("new")
         current = body.get("current")
+
+        if user.get("username") == "api-key":
+            raise ApiError(403, "use the admin account, not the API key")
         if not isinstance(new, str) or len(new) < 8:
             raise ApiError(400, "new password must be at least 8 characters")
-        if state.config.auth.get("password_hash") and not security.verify_password(
-            str(current or ""), state.config.auth["password_hash"]
-        ):
+        record = state.store.get_user(user["username"])
+        if record is None:
+            raise ApiError(401, "account no longer exists")
+        if not security.verify_password(str(current or ""), record["password_hash"]):
             raise ApiError(403, "current password is wrong")
-        await asyncio.to_thread(state.config.set_admin_password, new)
+
+        password_hash = await asyncio.to_thread(security.hash_password, new)
+        updated = await asyncio.to_thread(
+            state.store.set_user_password, user["username"], password_hash
+        )
+        if not updated:
+            raise ApiError(500, "could not update the password")
+
+        # Re-issue this browser's cookie so it survives its own version bump,
+        # and so other browsers holding the old version are logged out.
+        fresh = state.store.get_user_public(user["username"]) or {}
+        cookie = security.new_session_cookie(
+            state.config.session_secret(),
+            int(state.config.auth.get("session_ttl_hours", 336)),
+            subject=user["username"],
+            role=fresh.get("role", ROLE_USER),
+            version=float(fresh.get("updated") or 0),
+        )
+        state.store.add_event("password_changed", name=user["username"])
+        return _cookie_response({"ok": True}, state, cookie)
+
+    # -- users ---------------------------------------------------------- #
+    @app.get("/api/users")
+    async def list_users(request: Request) -> Any:
+        _require_admin(state, request)
+        return {"users": state.store.list_users()}
+
+    @app.post("/api/users")
+    async def create_user(request: Request) -> Response:
+        _require_admin(state, request)
+        body = await _json_body(request)
+        username = body.get("username")
+        password = body.get("password")
+        role = body.get("role") or ROLE_USER
+        display_name = str(body.get("display_name") or "").strip()
+
+        error = _validate_username(username)
+        if error:
+            raise ApiError(400, error)
+        if role not in ROLES:
+            raise ApiError(400, "role must be one of: %s" % ", ".join(ROLES))
+        if not isinstance(password, str) or len(password) < 8:
+            raise ApiError(400, "password must be at least 8 characters")
+        if await asyncio.to_thread(state.store.get_user, username) is not None:
+            raise ApiError(400, "a user named %r already exists" % username)
+
+        password_hash = await asyncio.to_thread(security.hash_password, password)
+        try:
+            user = await asyncio.to_thread(
+                state.store.create_user, username, password_hash,
+                role=role, display_name=display_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - unique constraint race
+            raise ApiError(400, "could not create the user: %s" % exc)
+        state.store.add_event("user_created", name=username, data={"role": role})
+        return JSONResponse(user, status_code=201)
+
+    @app.patch("/api/users/{username}")
+    async def update_user(username: str, request: Request) -> Any:
+        actor = _require_admin(state, request)
+        body = await _json_body(request)
+        record = await asyncio.to_thread(state.store.get_user_public, username)
+        if record is None:
+            raise ApiError(404, "no such user")
+
+        role = body.get("role")
+        display_name = body.get("display_name")
+        if role is not None:
+            if role not in ROLES:
+                raise ApiError(400, "role must be one of: %s" % ", ".join(ROLES))
+            if role != ROLE_ADMIN and record.get("role") == ROLE_ADMIN:
+                if await asyncio.to_thread(state.store.count_admins) <= 1:
+                    raise ApiError(400, "cannot demote the last administrator")
+        if display_name is not None:
+            display_name = str(display_name).strip()
+
+        new_password = body.get("password")
+        if new_password is not None:
+            if not isinstance(new_password, str) or len(new_password) < 8:
+                raise ApiError(400, "password must be at least 8 characters")
+            password_hash = await asyncio.to_thread(security.hash_password, new_password)
+            await asyncio.to_thread(state.store.set_user_password, username, password_hash)
+
+        if role is not None or display_name is not None:
+            await asyncio.to_thread(
+                state.store.update_user, username, role=role, display_name=display_name
+            )
+        state.store.add_event("user_updated", name=username, data={"by": actor["username"]})
+        return await asyncio.to_thread(state.store.get_user_public, username) or {}
+
+    @app.delete("/api/users/{username}")
+    async def delete_user(username: str, request: Request) -> Any:
+        actor = _require_admin(state, request)
+        record = await asyncio.to_thread(state.store.get_user, username)
+        if record is None:
+            raise ApiError(404, "no such user")
+        if record.get("role") == ROLE_ADMIN:
+            if await asyncio.to_thread(state.store.count_admins) <= 1:
+                raise ApiError(400, "cannot delete the last administrator")
+        if actor.get("username") == username:
+            raise ApiError(400, "you cannot delete your own account")
+        await asyncio.to_thread(state.store.delete_user, username)
+        state.store.add_event("user_deleted", name=username, data={"by": actor["username"]})
         return {"ok": True}
+
+    @app.post("/api/setup")
+    async def first_run_setup(request: Request) -> Response:
+        """Create the first administrator; only possible on an empty install."""
+        if await asyncio.to_thread(state.store.count_users) != 0:
+            raise ApiError(409, "setup has already been completed")
+        body = await _json_body(request)
+        username = body.get("username") or "admin"
+        password = body.get("password")
+        error = _validate_username(username)
+        if error:
+            raise ApiError(400, error)
+        if not isinstance(password, str) or len(password) < 8:
+            raise ApiError(400, "password must be at least 8 characters")
+        password_hash = await asyncio.to_thread(security.hash_password, password)
+        await asyncio.to_thread(
+            state.store.create_user, username, password_hash,
+            role=ROLE_ADMIN, display_name=str(body.get("display_name") or "").strip(),
+        )
+        state.store.add_event("user_created", name=username, data={"role": ROLE_ADMIN})
+        fresh = state.store.get_user(username) or {}
+        cookie = security.new_session_cookie(
+            state.config.session_secret(),
+            int(state.config.auth.get("session_ttl_hours", 336)),
+            subject=username, role=ROLE_ADMIN, version=float(fresh.get("updated") or 0),
+        )
+        LOG.info("first administrator %r created through setup", username)
+        return _cookie_response({"ok": True, "username": username}, state, cookie)
+
+
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,31}$")
+
+
+def _validate_username(username: Any) -> str:
+    if not isinstance(username, str) or not username.strip():
+        return "username is required"
+    if not USERNAME_PATTERN.match(username.strip()):
+        return ("username must be 2-32 characters: letters, digits, dot, dash "
+                "or underscore, starting with a letter or digit")
+    return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -444,8 +697,17 @@ def _register_ui(app: FastAPI, state: AppState) -> None:
     @app.get("/")
     async def index(request: Request) -> Response:
         if not _is_logged_in(state, request):
+            if state.store.count_users() == 0:
+                return FileResponse(WEB_DIR / "setup.html", media_type="text/html",
+                                    headers=no_store)
             return FileResponse(WEB_DIR / "login.html", media_type="text/html", headers=no_store)
         return FileResponse(WEB_DIR / "index.html", media_type="text/html", headers=no_store)
+
+    @app.get("/setup")
+    async def setup_page(request: Request) -> Response:
+        if state.store.count_users() > 0:
+            return RedirectResponse("/", status_code=303)
+        return FileResponse(WEB_DIR / "setup.html", media_type="text/html", headers=no_store)
 
     @app.get("/auth")
     async def auth_landing(request: Request) -> Response:

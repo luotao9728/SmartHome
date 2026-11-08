@@ -188,6 +188,39 @@ hand.  Alternatively:
   enrols itself (the token is written to `/config.json` on the board), or
 * `python -m smarthome node-token esp32-desk` prints a token for manual use.
 
+## Accounts
+
+The hub supports multiple accounts, stored in SQLite (never in `config.json`),
+so password changes apply immediately without restarting the service.
+
+* **First run** — a fresh install shows a setup page and asks you to create the
+  first administrator.
+* **Upgrading** — an existing single-password install is migrated
+  automatically: the old admin password becomes an `admin` account, and the
+  password you already have keeps working.
+* **Adding users** — as an administrator: **Settings → Users**, or
+  ```bash
+  python -m smarthome users add anna --role user
+  python -m smarthome users                     # list accounts
+  ```
+* **Changing your own password** — **Settings → Account** (any user).
+* **Resetting someone else's** — **Settings → Users → Reset password**, or
+  ```bash
+  python -m smarthome set-password anna
+  ```
+  A reset logs that user out everywhere, because the signed cookie carries a
+  version stamp that moves whenever the password or role changes.
+
+Two roles:
+
+| Role | Can do |
+| --- | --- |
+| `user` | see and control devices, change their own password |
+| `admin` | everything, plus users, device types, node tokens and settings |
+
+The last administrator cannot be demoted or deleted, and nobody can delete
+their own account.
+
 ## Node protocol
 
 One JSON object per WebSocket text frame (see `smarthome/protocol.py`).
@@ -251,6 +284,11 @@ curl -s -H "X-API-Key: $KEY" "http://pi:8080/api/devices/desk-strip/history?hour
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/login`, `/api/logout` | session cookie |
+| `GET` | `/api/me` | who am I, and does this install need setup |
+| `POST` | `/api/setup` | create the first administrator (empty install only) |
+| `POST` | `/api/password` | change your own password |
+| `GET`/`POST` | `/api/users` | list / create accounts *(admin)* |
+| `PATCH`/`DELETE` | `/api/users/{username}` | role, display name, password reset, delete *(admin)* |
 | `GET` | `/api/bootstrap` | devices, nodes, types, settings |
 | `GET`/`POST` | `/api/devices` | list / create |
 | `PATCH`/`DELETE` | `/api/devices/{uid}` | rename, re-room, re-wire, remove |
@@ -347,9 +385,13 @@ The screenshots in `docs/screenshots/` were produced by the last command.
 
 ## Security notes
 
-* The admin password is PBKDF2-SHA256 (240k iterations, random salt).
-* Sessions are signed cookies (HMAC-SHA256) with an expiry; device tokens are
-  opaque and stored only as SHA-256 hashes.
+* Passwords are PBKDF2-SHA256 (240k iterations, random salt) and live in the
+  SQLite database, never in `config.json`.
+* Sessions are signed cookies (HMAC-SHA256) with an expiry and a per-user
+  version stamp, so changing a password or role logs out other browsers.
+  Device tokens are opaque and stored only as SHA-256 hashes.
+* An unknown username and a wrong password return the same error, and take the
+  same time, so the API does not reveal which accounts exist.
 * Login attempts are throttled per client address.
 * Node sockets require a token unless the enrolment window is open; an
   enrolment window only issues a token for a node that does not already have

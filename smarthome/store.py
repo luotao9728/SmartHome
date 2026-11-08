@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 LOG = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -76,7 +76,40 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+
+CREATE TABLE IF NOT EXISTS users (
+    username      TEXT PRIMARY KEY,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'user',
+    display_name  TEXT NOT NULL DEFAULT '',
+    created       REAL NOT NULL,
+    updated       REAL NOT NULL,
+    last_login    REAL
+);
 """
+
+#: Schema migrations that must run against an existing database.
+MIGRATIONS = [
+    # (version, sql) - applied in order, each bumps "schema" in meta.
+    (
+        2,
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            username      TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            role          TEXT NOT NULL DEFAULT 'user',
+            display_name  TEXT NOT NULL DEFAULT '',
+            created       REAL NOT NULL,
+            updated       REAL NOT NULL,
+            last_login    REAL
+        );
+        """,
+    ),
+]
+
+ROLE_ADMIN = "admin"
+ROLE_USER = "user"
+ROLES = (ROLE_ADMIN, ROLE_USER)
 
 
 def _loads(text: Optional[str], fallback: Any) -> Any:
@@ -100,12 +133,25 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.execute(
                 "INSERT INTO meta(key, value) VALUES('schema', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (str(SCHEMA_VERSION),),
             )
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Apply migrations newer than the database's recorded version."""
+        row = self._conn.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+        try:
+            current = int(row["value"]) if row else 1
+        except (TypeError, ValueError):
+            current = 1
+        for version, sql in MIGRATIONS:
+            if version > current:
+                LOG.info("migrating database to schema %d", version)
+                self._conn.executescript(sql)
 
     def close(self) -> None:
         with self._lock:
@@ -123,6 +169,98 @@ class Store:
     def _query(self, sql: str, params: Sequence[Any] = ()) -> List[sqlite3.Row]:
         with self._lock:
             return list(self._conn.execute(sql, params).fetchall())
+
+    # ------------------------------------------------------------------ #
+    # users
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _row_to_user(row: sqlite3.Row) -> Dict[str, Any]:
+        user = dict(row)
+        user.pop("password_hash", None)
+        return user
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        rows = self._query(
+            "SELECT username, role, display_name, created, updated, last_login "
+            "FROM users ORDER BY (role != 'admin'), username COLLATE NOCASE"
+        )
+        return [dict(row) for row in rows]
+
+    def count_users(self) -> int:
+        rows = self._query("SELECT COUNT(*) AS n FROM users")
+        return int(rows[0]["n"]) if rows else 0
+
+    def count_admins(self) -> int:
+        rows = self._query("SELECT COUNT(*) AS n FROM users WHERE role='admin'")
+        return int(rows[0]["n"]) if rows else 0
+
+    def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        rows = self._query("SELECT * FROM users WHERE username=?", (username,))
+        return dict(rows[0]) if rows else None
+
+    def get_user_public(self, username: str) -> Optional[Dict[str, Any]]:
+        rows = self._query(
+            "SELECT username, role, display_name, created, updated, last_login "
+            "FROM users WHERE username=?",
+            (username,),
+        )
+        return dict(rows[0]) if rows else None
+
+    def create_user(self, username: str, password_hash: str, *, role: str = "user",
+                    display_name: str = "", now: Optional[float] = None) -> Dict[str, Any]:
+        ts = time.time() if now is None else now
+        self._execute(
+            "INSERT INTO users(username, password_hash, role, display_name, created, updated) "
+            "VALUES(?,?,?,?,?,?)",
+            (username, password_hash, role, display_name, ts, ts),
+        )
+        return self.get_user_public(username) or {}
+
+    def set_user_password(self, username: str, password_hash: str,
+                          now: Optional[float] = None) -> bool:
+        # ``updated`` doubles as the session version.  float() keeps sub-second
+        # resolution, and the guard below guarantees it actually advances even
+        # if two changes land inside the same clock tick -- otherwise the old
+        # cookie would still validate.
+        ts = time.time() if now is None else now
+        rows = self._query("SELECT updated FROM users WHERE username=?", (username,))
+        if rows and ts <= float(rows[0]["updated"] or 0):
+            ts = float(rows[0]["updated"] or 0) + 0.001
+        cursor = self._execute(
+            "UPDATE users SET password_hash=?, updated=? WHERE username=?",
+            (password_hash, ts, username),
+        )
+        return bool(cursor.rowcount)
+
+    def update_user(self, username: str, *, role: Optional[str] = None,
+                    display_name: Optional[str] = None,
+                    now: Optional[float] = None) -> bool:
+        parts: List[str] = []
+        params: List[Any] = []
+        if role is not None:
+            parts.append("role=?")
+            params.append(role)
+        if display_name is not None:
+            parts.append("display_name=?")
+            params.append(display_name)
+        if not parts:
+            return False
+        parts.append("updated=?")
+        params.append(time.time() if now is None else now)
+        params.append(username)
+        cursor = self._execute("UPDATE users SET %s WHERE username=?" % ", ".join(parts), params)
+        return bool(cursor.rowcount)
+
+    def touch_login(self, username: str, now: Optional[float] = None) -> None:
+        # last_login must NOT bump ``updated``: that field is the session
+        # version, and touching it on every login would log the user out of the
+        # browser they just signed in from.
+        self._execute("UPDATE users SET last_login=? WHERE username=?",
+                      (time.time() if now is None else now, username))
+
+    def delete_user(self, username: str) -> bool:
+        cursor = self._execute("DELETE FROM users WHERE username=?", (username,))
+        return bool(cursor.rowcount)
 
     # ------------------------------------------------------------------ #
     # nodes

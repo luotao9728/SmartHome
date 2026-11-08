@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>Set up · SmartHome</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b82f6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-page">
+  <main class="login">
+    <div class="login-card">
+      <svg class="login-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="9" fill="url(#g3)"/>
+        <path d="M16 6.5l7.5 5.3v8.4L16 25.5l-7.5-5.3v-8.4z" fill="#fff" fill-opacity=".92"/>
+        <path d="M16 11.5l3.8 2.7v4.2L16 21l-3.8-2.6v-4.2z" fill="#3b82f6"/>
+        <defs><linearGradient id="g3" x1="0" y1="0" x2="32" y2="32">
+          <stop stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/>
+        </linearGradient></defs>
+      </svg>
+      <h1>Welcome</h1>
+      <p class="muted">Create the first administrator account for this hub.</p>
+      <form id="setup-form" autocomplete="off">
+        <label class="field">
+          <span>Username</span>
+          <input type="text" id="username" name="username" value="admin" autocomplete="username"
+                 spellcheck="false" autocapitalize="none" required>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="password" name="password" autocomplete="new-password"
+                 minlength="8" required autofocus>
+          <span class="hint">At least 8 characters.</span>
+        </label>
+        <label class="field">
+          <span>Repeat password</span>
+          <input type="password" id="confirm" name="confirm" autocomplete="new-password"
+                 minlength="8" required>
+        </label>
+        <p class="error" id="setup-error" role="alert" hidden></p>
+        <button class="btn primary wide" id="setup-submit" type="submit">Create account</button>
+      </form>
+      <p class="hint">You can add more users later under Settings → Users.</p>
+    </div>
+  </main>
+  <script>
+    const form = document.getElementById('setup-form');
+    const error = document.getElementById('setup-error');
+    const submit = document.getElementById('setup-submit');
+    const password = document.getElementById('password');
+    const confirm = document.getElementById('confirm');
+
+    function fail(message) {
+      error.textContent = message;
+      error.hidden = false;
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      error.hidden = true;
+      if (password.value.length < 8) return fail('The password must be at least 8 characters.');
+      if (password.value !== confirm.value) return fail('The two passwords do not match.');
+
+      submit.disabled = true;
+      submit.textContent = 'Creating…';
+      try {
+        const response = await fetch('/api/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            username: document.getElementById('username').value.trim(),
+            password: password.value,
+          }),
+        });
+        if (response.ok) {
+          location.replace('/');
+          return;
+        }
+        const detail = await response.json().catch(() => ({}));
+        fail(detail.error || ('Setup failed (' + response.status + ')'));
+      } catch (err) {
+        fail('Cannot reach the server.');
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Create account';
+      }
+    });
+  </script>
+</body>
+</html>

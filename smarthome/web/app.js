@@ -101,6 +101,7 @@ const state = {
   nodes: new Map(),
   types: new Map(),
   settings: {},
+  user: null,
   busied: new Set(),
   dismissedErrors: new Set(),
   connected: false,
@@ -275,7 +276,9 @@ function applySettings() {
   document.title = title;
   $('#app-title').textContent = title;
   const online = [...state.devices.values()].filter((device) => device.online).length;
-  $('#footer-info').textContent = online + ' of ' + state.devices.size + ' devices online · ' +
+  const who = state.user ? state.user.username
+    + (state.user.role === 'admin' ? ' (admin)' : '') + ' · ' : '';
+  $('#footer-info').textContent = who + online + ' of ' + state.devices.size + ' devices online · ' +
     (state.settings.heartbeat_s ? 'heartbeat ' + state.settings.heartbeat_s + 's' : '');
 }
 
@@ -1247,6 +1250,8 @@ function paintSettingsDialog() {
       <button role="tab" aria-selected="false" data-tab="nodes">Nodes</button>
       <button role="tab" aria-selected="false" data-tab="types">Device types</button>
       <button role="tab" aria-selected="false" data-tab="account">Account</button>
+      ${state.user && state.user.role === 'admin'
+        ? '<button role="tab" aria-selected="false" data-tab="users">Users</button>' : ''}
     </div>
     <section data-panel="network">
       <div class="field-row">
@@ -1328,8 +1333,126 @@ function paintSettingsDialog() {
       </div>
       <p class="hint">You will stay signed in on this device. Other browsers keep their
         existing sessions until they expire.</p>
-    </section>`;
+    </section>
+    ${state.user && state.user.role === 'admin' ? `
+    <section data-panel="users" hidden>
+      <div class="field">
+        <span>Accounts</span>
+        <div class="log-list" data-user-list>
+          <p class="muted" style="font-size:13px">Loading…</p>
+        </div>
+      </div>
+      <div class="field">
+        <span>Add a user</span>
+        <div class="field-row">
+          <label class="field"><span>Username</span>
+            <input type="text" data-new-user="username" placeholder="e.g. anna"
+                   spellcheck="false" autocapitalize="none" maxlength="32">
+          </label>
+          <label class="field"><span>Role</span>
+            <select data-new-user="role">
+              <option value="user">User — can control devices</option>
+              <option value="admin">Administrator — full access</option>
+            </select>
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field"><span>Password</span>
+            <input type="password" data-new-user="password" autocomplete="new-password" minlength="8">
+            <span class="hint">At least 8 characters. Tell them to change it after signing in.</span>
+          </label>
+          <label class="field"><span>Display name <span class="muted">(optional)</span></span>
+            <input type="text" data-new-user="display_name" maxlength="48">
+          </label>
+        </div>
+        <p class="error" data-user-error hidden></p>
+        <button type="button" class="btn primary sm" data-user-create>Add user</button>
+      </div>
+    </section>` : ''}`;
   wireSettingsDialog(body);
+  if (state.user && state.user.role === 'admin') loadUsers(body);
+}
+
+async function loadUsers(root) {
+  const list = $('[data-user-list]', root || document);
+  if (!list) return;
+  try {
+    const payload = await api('/api/users');
+    const users = payload.users || [];
+    list.innerHTML = users.map((user) => {
+      const isSelf = state.user && state.user.username === user.username;
+      const last = user.last_login
+        ? new Date(user.last_login * 1000).toLocaleDateString()
+        : 'never';
+      return `<div class="log-item" data-user="${escapeHtml(user.username)}">
+        <div class="when">${escapeHtml(user.role === 'admin' ? 'admin' : 'user')}</div>
+        <div class="what">
+          <b>${escapeHtml(user.username)}</b>${isSelf ? ' <span class="muted">(you)</span>' : ''}
+          ${user.display_name ? `<span class="muted">${escapeHtml(user.display_name)}</span>` : ''}
+          <span class="muted" style="font-size:12px">last login: ${escapeHtml(last)}</span>
+          <span style="flex:1"></span>
+          <button class="btn sm" data-user-reset="${escapeHtml(user.username)}">Reset password</button>
+          ${isSelf ? '' : `<button class="btn sm danger" data-user-delete="${escapeHtml(user.username)}">Delete</button>`}
+        </div>
+      </div>`;
+    }).join('') || '<p class="muted">No accounts.</p>';
+
+    for (const button of $$('[data-user-reset]', list)) {
+      button.addEventListener('click', () => resetUserPassword(button.dataset.userReset));
+    }
+    for (const button of $$('[data-user-delete]', list)) {
+      button.addEventListener('click', () => deleteUser(button.dataset.userDelete));
+    }
+  } catch (error) {
+    list.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function createUser(root) {
+  const error = $('[data-user-error]', root);
+  const username = $('[data-new-user="username"]', root).value.trim();
+  const password = $('[data-new-user="password"]', root).value;
+  const role = $('[data-new-user="role"]', root).value;
+  const displayName = $('[data-new-user="display_name"]', root).value.trim();
+  const fail = (message) => { error.textContent = message; error.hidden = false; };
+  error.hidden = true;
+
+  if (!username) return fail('Enter a username.');
+  if (password.length < 8) return fail('The password must be at least 8 characters.');
+
+  try {
+    await api('/api/users', { method: 'POST',
+      body: { username, password, role, display_name: displayName } });
+    for (const input of $$('[data-new-user]', root)) input.value = '';
+    $('[data-new-user="role"]', root).value = 'user';
+    showToast('User ' + username + ' added', 'ok');
+    await loadUsers(root);
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+async function resetUserPassword(username) {
+  const next = prompt('New password for "' + username + '" (at least 8 characters):', '');
+  if (next === null) return;
+  if (next.length < 8) return showToast('Password must be at least 8 characters', 'error');
+  try {
+    await api('/api/users/' + encodeURIComponent(username), { method: 'PATCH', body: { password: next } });
+    showToast('Password reset for ' + username, 'ok');
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
+}
+
+async function deleteUser(username) {
+  if (!confirm('Delete the account "' + username + '"?\n\nThey will be signed out immediately.')) return;
+  try {
+    await api('/api/users/' + encodeURIComponent(username), { method: 'DELETE' });
+    showToast('Deleted ' + username, 'ok');
+    await loadUsers();
+  } catch (error) {
+    showToast(error.message, 'error');
+  }
 }
 
 function wireSettingsDialog(body) {
@@ -1354,6 +1477,9 @@ function wireSettingsDialog(body) {
       });
     }
   }
+
+  const createUserButton = $('[data-user-create]', body);
+  if (createUserButton) createUserButton.addEventListener('click', () => createUser(body));
   const enrollButton = $('[data-enroll]', body);
   if (enrollButton) {
     enrollButton.addEventListener('click', async () => {
@@ -1581,10 +1707,15 @@ async function boot() {
   initTheme();
   try {
     const me = await api('/api/me');
+    if (me.needs_setup) {
+      location.replace('/setup');
+      return;
+    }
     if (!me.authenticated) {
       location.replace('/');
       return;
     }
+    state.user = me.user || null;
   } catch {
     location.replace('/');
     return;

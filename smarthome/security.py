@@ -136,6 +136,23 @@ def verify_session(cookie: str, secret: str, *, now: Optional[float] = None) -> 
     return payload
 
 
-def new_session_cookie(secret: str, ttl_hours: int, *, subject: str = "admin") -> str:
+def new_session_cookie(secret: str, ttl_hours: int, *, subject: str = "admin",
+                       role: str = "admin", version: float = 0.0) -> str:
+    """Build a signed session cookie.
+
+    ``version`` is the user's ``updated`` stamp at issue time, kept as a float:
+    truncating it to whole seconds would let two changes in the same second
+    share a version, so a stale cookie would keep validating.  Bumping it (a
+    password or role change) invalidates sessions issued before it.
+    """
     now = time.time()
-    return sign_session({"sub": subject, "iat": int(now), "exp": int(now + ttl_hours * 3600)}, secret)
+    return sign_session(
+        {
+            "sub": subject,
+            "role": role,
+            "ver": float(version),
+            "iat": int(now),
+            "exp": int(now + ttl_hours * 3600),
+        },
+        secret,
+    )

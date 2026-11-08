@@ -20,8 +20,13 @@
         </linearGradient></defs>
       </svg>
       <h1>SmartHome</h1>
-      <p class="muted">Enter the admin password to continue.</p>
+      <p class="muted" id="login-hint">Sign in to continue.</p>
       <form id="login-form" autocomplete="on">
+        <label class="field">
+          <span>Username</span>
+          <input type="text" id="username" name="username" autocomplete="username"
+                 placeholder="admin" spellcheck="false" autocapitalize="none">
+        </label>
         <label class="field">
           <span>Password</span>
           <input type="password" id="password" name="password" autocomplete="current-password"
@@ -37,24 +42,48 @@
     const form = document.getElementById('login-form');
     const error = document.getElementById('login-error');
     const submit = document.getElementById('login-submit');
+    const usernameField = document.getElementById('username');
+    const passwordField = document.getElementById('password');
+    const hint = document.getElementById('login-hint');
+
+    // With a single account the username can stay empty; with several
+    // /api/me tells us a username is needed, so reveal and require it.
+    fetch('/api/me', { credentials: 'same-origin' })
+      .then((response) => response.json())
+      .then((me) => {
+        if (me.needs_setup) {
+          location.replace('/setup');
+        }
+      })
+      .catch(() => {});
+
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       error.hidden = true;
       submit.disabled = true;
       submit.textContent = 'Signing in…';
       try {
+        const body = { password: passwordField.value };
+        if (usernameField.value.trim()) body.username = usernameField.value.trim();
         const response = await fetch('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: document.getElementById('password').value }),
+          credentials: 'same-origin',
+          body: JSON.stringify(body),
         });
         if (response.ok) {
           location.replace('/');
           return;
         }
         const detail = await response.json().catch(() => ({}));
-        error.textContent = detail.error || ('Sign in failed (' + response.status + ')');
+        const message = detail.error || ('Sign in failed (' + response.status + ')');
+        error.textContent = message;
         error.hidden = false;
+        if (/username is required/i.test(message)) {
+          hint.textContent = 'This hub has several accounts — enter your username too.';
+          usernameField.required = true;
+          usernameField.focus();
+        }
       } catch (err) {
         error.textContent = 'Cannot reach the server.';
         error.hidden = false;

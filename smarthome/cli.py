@@ -72,7 +72,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .logging_setup import setup_logging
     from .server import create_app
 
-    config = _config(args, bootstrap_password=True)
+    # No legacy password: accounts live in the database, and an empty install
+    # is meant to show the first-run setup page.  Generating a config hash here
+    # would create an "admin" account behind the user's back and hide setup.
+    config = _config(args)
     overrides = False
     if args.host:
         config.data["server"]["host"] = args.host
@@ -85,9 +88,6 @@ def cmd_serve(args: argparse.Namespace) -> int:
         # banner and the API must report the address actually in use.
         config.save()
     setup_logging(level=args.log_level, path=config.data_dir / "smarthome.log" if args.log_file else None)
-
-    if config.generated_password:
-        print("\nAdmin password generated: %s\n" % config.generated_password, flush=True)
 
     app = create_app(str(config.path))
     uvicorn.run(
@@ -123,6 +123,14 @@ def _running_service_config() -> Optional[Path]:
 
 
 def cmd_set_password(args: argparse.Namespace) -> int:
+    """Reset a user's password directly in the database.
+
+    Writes to the same SQLite file the service uses, so it takes effect on the
+    next login with no restart.  This is the "I am locked out" path.
+    """
+    from .store import ROLE_ADMIN, ROLE_USER, Store
+    from . import security
+
     config = _config(args)
     password = args.password
     if not password:
@@ -132,32 +140,90 @@ def cmd_set_password(args: argparse.Namespace) -> int:
             print("passwords do not match", file=sys.stderr)
             return 1
         password = first
+    if len(password) < 8:
+        print("error: password must be at least 8 characters", file=sys.stderr)
+        return 1
 
-    # Guard against the classic footgun: writing the hash to a config the
-    # service never reads (it keeps the old password, so nothing seems to
-    # happen).  Only a warning -- there are legitimate reasons for a split.
-    service_config = _running_service_config()
-    if service_config is not None and service_config != config.path:
-        print("warning: the running service uses %s" % service_config, file=sys.stderr)
-        print("         but this command is about to edit %s" % config.path, file=sys.stderr)
-        print("         Re-run with --config %s to change the service's password."
-              % service_config, file=sys.stderr)
-
+    store = Store(config.db_path)
     try:
-        config.set_admin_password(password)
-    except ValueError as exc:
-        print("error: %s" % exc, file=sys.stderr)
-        return 1
-    except OSError as exc:
-        print("error: cannot write %s: %s" % (config.path, exc), file=sys.stderr)
-        if os.geteuid() != 0 if hasattr(os, "geteuid") else False:
-            print("hint: try again with sudo", file=sys.stderr)
-        return 1
+        username = args.username or "admin"
+        users = store.list_users()
+        existing = store.get_user(username)
 
-    print("password updated in %s" % config.path)
-    if service_config is not None and service_config == config.path:
-        print("the running service reads this file; no restart needed")
-    return 0
+        if existing is None and users:
+            print("error: no user %r.  Existing users: %s"
+                  % (username, ", ".join(u["username"] for u in users)), file=sys.stderr)
+            return 1
+
+        password_hash = security.hash_password(password)
+        if existing is None:
+            role = ROLE_ADMIN if not users else ROLE_USER
+            store.create_user(username, password_hash, role=role,
+                              display_name="Administrator" if role == ROLE_ADMIN else "")
+            print("created user %r (%s)" % (username, role))
+        else:
+            store.set_user_password(username, password_hash)
+            print("password updated for %r" % username)
+        store.add_event("password_reset", name=username, data={"via": "cli"})
+        print("stored in %s" % config.db_path)
+        print("the new password works immediately; no restart needed")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_users(args: argparse.Namespace) -> int:
+    """List users, or add/remove them."""
+    from .store import ROLE_ADMIN, ROLE_USER, ROLES, Store
+    from . import security
+
+    config = _config(args)
+    store = Store(config.db_path)
+    try:
+        if args.action == "add":
+            if args.username in [u["username"] for u in store.list_users()]:
+                print("error: %r already exists" % args.username, file=sys.stderr)
+                return 1
+            password = args.password
+            if not password:
+                password = getpass.getpass("Password for %s: " % args.username)
+            if len(password) < 8:
+                print("error: password must be at least 8 characters", file=sys.stderr)
+                return 1
+            role = args.role or ROLE_USER
+            if role not in ROLES:
+                print("error: --role must be one of %s" % ", ".join(ROLES), file=sys.stderr)
+                return 1
+            store.create_user(args.username, security.hash_password(password),
+                              role=role, display_name=args.display_name or "")
+            print("created %r (%s)" % (args.username, role))
+            return 0
+
+        if args.action == "delete":
+            if store.get_user(args.username) is None:
+                print("error: no user %r" % args.username, file=sys.stderr)
+                return 1
+            record = store.get_user_public(args.username) or {}
+            if record.get("role") == ROLE_ADMIN and store.count_admins() <= 1:
+                print("error: cannot delete the last administrator", file=sys.stderr)
+                return 1
+            store.delete_user(args.username)
+            print("deleted %r" % args.username)
+            return 0
+
+        users = store.list_users()
+        if not users:
+            print("no users yet - create one with: python -m smarthome users add <name>")
+            return 0
+        print("%-20s %-8s %-24s %s" % ("USERNAME", "ROLE", "DISPLAY NAME", "LAST LOGIN"))
+        for user in users:
+            last = user.get("last_login")
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(last)) if last else "never"
+            print("%-20s %-8s %-24s %s" % (
+                user["username"], user.get("role", ""), (user.get("display_name") or "")[:24], when))
+        return 0
+    finally:
+        store.close()
 
 
 def cmd_apikey(args: argparse.Namespace) -> int:
@@ -286,10 +352,21 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--access-log", action="store_true", help="log every HTTP request")
     serve.set_defaults(func=cmd_serve)
 
-    password = sub.add_parser("set-password", help="change the admin password")
+    password = sub.add_parser("set-password", help="reset a user's password (recovery)")
     _add_common(password)
+    password.add_argument("username", nargs="?", default="admin")
     password.add_argument("--password")
     password.set_defaults(func=cmd_set_password)
+
+    users = sub.add_parser("users", help="list, add or delete web UI users")
+    _add_common(users)
+    users.add_argument("action", nargs="?", default="list",
+                       choices=["list", "add", "delete"])
+    users.add_argument("username", nargs="?")
+    users.add_argument("--password")
+    users.add_argument("--role", choices=["admin", "user"])
+    users.add_argument("--display-name")
+    users.set_defaults(func=cmd_users)
 
     apikey = sub.add_parser("apikey", help="show or rotate the API key")
     _add_common(apikey)
