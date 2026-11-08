@@ -76,3 +76,6 @@ pytest-of-*/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Scratch dirs from temporary Config/Store runs in tests or ad-hoc checks
+tmp*/
