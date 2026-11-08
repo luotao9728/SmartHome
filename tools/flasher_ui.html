@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash a microcontroller · SmartHome</title>
+<style>
+  :root {
+    --bg: #0f1218; --panel: #171b23; --panel2: #1e232d; --line: #2a313d;
+    --text: #e9eef7; --dim: #9aa6b8; --faint: #6b7688;
+    --accent: #4f8cff; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 28px 20px 80px; }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--dim); font-size: 13.5px; margin: 0 0 24px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 20px; margin-bottom: 18px;
+  }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--faint); margin: 0 0 14px; font-weight: 650; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid.three { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 640px) { .grid, .grid.three { grid-template-columns: 1fr; } }
+  label { display: grid; gap: 6px; font-size: 12.5px; color: var(--dim); font-weight: 550; }
+  input, select {
+    width: 100%; height: 40px; padding: 0 11px; font: inherit; color: var(--text);
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  input:disabled, select:disabled { opacity: .55; }
+  .hint { font-size: 12px; color: var(--faint); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; border-radius: 9px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--text); height: 38px; padding: 0 16px;
+    cursor: pointer; white-space: nowrap;
+  }
+  button:hover:not(:disabled) { background: #262c38; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent); border-color: transparent; color: #fff; height: 44px;
+    padding: 0 22px; font-size: 15px;
+  }
+  button.primary:hover:not(:disabled) { background: #649bff; }
+  .port-row {
+    display: flex; align-items: center; gap: 10px; padding: 11px 13px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel2); margin-bottom: 8px;
+    cursor: pointer;
+  }
+  .port-row.sel { border-color: var(--accent); background: rgba(79,140,255,.1); }
+  .port-row .name { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .port-row .desc { font-size: 12.5px; color: var(--dim); }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 99px; background: #2a3140; color: var(--dim); }
+  .tag.hot { background: rgba(52,211,153,.15); color: var(--ok); }
+  .empty { color: var(--faint); font-size: 13.5px; padding: 8px 0; }
+  .steps { display: grid; gap: 2px; margin-top: 4px; }
+  .step {
+    display: grid; grid-template-columns: 26px 1fr auto; gap: 12px;
+    align-items: center; padding: 10px 6px; border-bottom: 1px solid var(--line);
+  }
+  .step:last-child { border-bottom: 0; }
+  .dot {
+    width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 11px; font-weight: 700; background: #232a36; color: var(--faint);
+  }
+  .step.running .dot { background: rgba(79,140,255,.2); color: var(--accent); }
+  .step.running .dot::after {
+    content: ""; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid rgba(79,140,255,.3); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  .step.done .dot { background: rgba(52,211,153,.16); color: var(--ok); }
+  .step.done .dot::after { content: "✓"; }
+  .step.failed .dot { background: rgba(248,113,113,.16); color: var(--err); }
+  .step.failed .dot::after { content: "✕"; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .step .label { font-size: 14px; }
+  .step .detail { font-size: 12px; color: var(--faint); font-family: var(--mono); }
+  .step.running .label { color: var(--accent); }
+  .step.failed .label { color: var(--err); }
+  .step .time { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  pre#log {
+    margin: 0; padding: 12px 14px; background: #0b0e13; border: 1px solid var(--line);
+    border-radius: 10px; max-height: 320px; overflow: auto; font-family: var(--mono);
+    font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  }
+  pre#log .info { color: var(--dim); }
+  pre#log .cmd { color: var(--faint); }
+  pre#log .warn { color: var(--warn); }
+  pre#log .error { color: var(--err); }
+  pre#log .ok { color: var(--ok); }
+  .banner { padding: 12px 14px; border-radius: 10px; font-size: 13.5px; margin-bottom: 16px; }
+  .banner.error { background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.4); color: #fecaca; }
+  .banner.ok { background: rgba(52,211,153,.12); border: 1px solid rgba(52,211,153,.4); color: #a7f3d0; }
+  .banner.warn { background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.35); color: #fde68a; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="9" fill="#4f8cff"/>
+      <path d="M16 6.5l7.5 5.3v8.4L16 25.5l-7.5-5.3v-8.4z" fill="#fff" fill-opacity=".92"/>
+      <path d="M16 11.5l3.8 2.7v4.2L16 21l-3.8-2.6v-4.2z" fill="#4f8cff"/>
+    </svg>
+    <h1>Flash a microcontroller</h1>
+  </header>
+  <p class="sub">Plug the board into this computer with a USB data cable. All steps run here, not on the Pi.</p>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <div class="card">
+    <h2>1 · Board</h2>
+    <div id="ports"><div class="empty">Looking for serial ports…</div></div>
+    <div class="row" style="margin-top:12px">
+      <button id="rescan" type="button">Rescan</button>
+      <button id="probe" type="button" disabled>Check board</button>
+      <span id="probeResult" class="hint"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2 · Hub</h2>
+    <div class="grid">
+      <label>Home server address
+        <input id="server" type="text" value="http://10.0.0.105:8080" spellcheck="false">
+      </label>
+      <label>Hub username
+        <input id="hub_username" type="text" value="admin" spellcheck="false" autocapitalize="none">
+      </label>
+    </div>
+    <div class="grid" style="margin-top:14px">
+      <label>Hub password
+        <input id="hub_password" type="password" placeholder="admin password" autocomplete="off">
+        <span class="hint">Used once to get a device token. Leave empty to enrol the board from the UI instead.</span>
+      </label>
+      <label>Node id
+        <input id="node_id" type="text" placeholder="auto (esp32-&lt;device id&gt;)" spellcheck="false" autocapitalize="none">
+        <span class="hint">A name for this board on the hub.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Wi-Fi</h2>
+    <div class="grid">
+      <label>Network name (SSID)
+        <input id="wifi_ssid" type="text" placeholder="MyNetwork" spellcheck="false" autocapitalize="none">
+      </label>
+      <label>Password
+        <input id="wifi_pass" type="password" placeholder="Wi-Fi password" autocomplete="off">
+        <span class="hint">The C6 only supports 2.4 GHz networks.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4 · Device</h2>
+    <div class="grid">
+      <label>Device type
+        <select id="device_type"></select>
+      </label>
+      <label>Device id (uid)
+        <input id="device_uid" type="text" placeholder="kitchen-strip" spellcheck="false" autocapitalize="none">
+        <span class="hint">Unique across the hub, e.g. kitchen-strip.</span>
+      </label>
+    </div>
+    <label style="margin-top:14px">Display name
+      <input id="device_name" type="text" placeholder="Kitchen Light">
+    </label>
+    <div id="typeConfig" class="grid three" style="margin-top:14px"></div>
+    <p id="typeHelp" class="hint" style="margin:10px 0 0"></p>
+  </div>
+
+  <div class="row" style="margin: 22px 0 8px">
+    <button id="flash" class="primary" type="button" disabled>Flash Micro Controller</button>
+    <span id="flashHint" class="hint">Fill in the form above.</span>
+  </div>
+
+  <div id="progress" class="card hidden">
+    <h2>Progress</h2>
+    <div class="steps" id="steps"></div>
+  </div>
+
+  <div id="logCard" class="card hidden">
+    <h2>Details</h2>
+    <pre id="log"></pre>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[ch]));
+
+const state = {
+  ports: [],
+  types: [],
+  selectedPort: null,
+  selectedKind: 'serial',
+  busy: false,
+  eventSource: null,
+};
+
+function banner(kind, text) {
+  const el = $('banner');
+  el.className = 'banner ' + kind;
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+function clearBanner() {
+  $('banner').classList.add('hidden');
+}
+
+async function api(path, options = {}) {
+  const init = { method: options.method || 'GET', headers: {} };
+  if (options.body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(path, init);
+  const text = await response.text();
+  let payload = null;
+  if (text) { try { payload = JSON.parse(text); } catch { payload = { error: text }; } }
+  if (!response.ok) throw new Error((payload && payload.error) || ('HTTP ' + response.status));
+  return payload;
+}
+
+/* ------------------------------------------------------------- ports ---- */
+function renderPorts() {
+  const box = $('ports');
+  if (!state.ports.length) {
+    box.innerHTML = '<div class="empty">No board found. For an ESP32, connect it with a USB ' +
+      '<b>data</b> cable. For a Pico 2 W, hold <b>BOOT</b> while plugging it in — ' +
+      'it appears as a removable drive. Then press Rescan.</div>';
+    $('probe').disabled = true;
+    return;
+  }
+  box.innerHTML = state.ports.map((port) => {
+    const isUf2 = port.kind === 'uf2';
+    const tag = isUf2
+      ? '<span class="tag hot">BOOTSEL drive</span>'
+      : (port.likely_microcontroller
+          ? `<span class="tag hot">${escapeHtml(port.vendor || 'microcontroller')}</span>`
+          : '<span class="tag">serial device</span>');
+    return `
+    <div class="port-row ${port.device === state.selectedPort ? 'sel' : ''}"
+         data-port="${escapeHtml(port.device)}" data-kind="${escapeHtml(port.kind || 'serial')}">
+      <div style="flex:1;min-width:0">
+        <div class="name">${escapeHtml(port.device)}</div>
+        <div class="desc">${escapeHtml(port.description || 'unknown device')}</div>
+      </div>
+      ${tag}
+    </div>`;
+  }).join('');
+  for (const row of document.querySelectorAll('.port-row')) {
+    row.addEventListener('click', () => selectPort(row.dataset.port, row.dataset.kind));
+  }
+  $('probe').disabled = !state.selectedPort;
+}
+
+function selectedKind() {
+  const port = state.ports.find((item) => item.device === state.selectedPort);
+  return (port && port.kind) || 'serial';
+}
+
+function selectPort(device, kind) {
+  state.selectedPort = device;
+  state.selectedKind = kind || 'serial';
+  renderPorts();
+  updateFlashState();
+  $('probeResult').textContent = '';
+}
+
+/* -------------------------------------------------------- device types -- */
+function renderTypes() {
+  const select = $('device_type');
+  select.innerHTML = state.types.map((type) =>
+    `<option value="${escapeHtml(type.id)}">${escapeHtml(type.name)}</option>`).join('');
+  renderTypeConfig();
+  select.addEventListener('change', renderTypeConfig);
+}
+
+function currentType() {
+  const id = $('device_type').value;
+  return state.types.find((type) => type.id === id) || null;
+}
+
+function renderTypeConfig() {
+  const type = currentType();
+  const box = $('typeConfig');
+  if (!type) { box.innerHTML = ''; return; }
+
+  const pinField = type.config.find((field) => field.is_pin);
+  box.innerHTML = type.config.map((field) => {
+    // The primary pin is shown first and labelled clearly, since it is the
+    // only field most people need.
+    const value = field.default ?? '';
+    const unit = field.unit ? ` (${escapeHtml(field.unit)})` : '';
+    if (field.type === 'bool') {
+      return `<label>${escapeHtml(field.label)}
+        <select data-cfg="${escapeHtml(field.key)}" data-kind="bool">
+          <option value="false" ${field.default ? '' : 'selected'}>No</option>
+          <option value="true" ${field.default ? 'selected' : ''}>Yes</option>
+        </select></label>`;
+    }
+    if (field.type === 'int' || field.type === 'float') {
+      const step = field.type === 'float' ? '0.1' : '1';
+      const min = field.min !== null && field.min !== undefined ? `min="${field.min}"` : '';
+      const max = field.max !== null && field.max !== undefined ? `max="${field.max}"` : '';
+      return `<label>${escapeHtml(field.label)}${unit}
+        <input type="number" step="${step}" ${min} ${max}
+               data-cfg="${escapeHtml(field.key)}" data-kind="${escapeHtml(field.type)}"
+               value="${escapeHtml(value)}"></label>`;
+    }
+    return `<label>${escapeHtml(field.label)}${unit}
+      <input type="text" data-cfg="${escapeHtml(field.key)}" data-kind="string"
+             value="${escapeHtml(value)}"></label>`;
+  }).join('');
+  if (pinField) {
+    const pinInput = box.querySelector(`[data-cfg="${CSS.escape(pinField.key)}"]`);
+    if (pinInput) pinInput.setAttribute('placeholder', 'e.g. 4');
+  }
+  $('typeHelp').textContent = type.description || '';
+  updateFlashState();
+}
+
+function collectConfig() {
+  const config = {};
+  for (const input of document.querySelectorAll('[data-cfg]')) {
+    const kind = input.dataset.kind;
+    if (input.value === '') continue;
+    config[input.dataset.cfg] = kind === 'bool' ? input.value === 'true'
+      : (kind === 'int' || kind === 'float') ? Number(input.value) : input.value;
+  }
+  return config;
+}
+
+/* ------------------------------------------------------- form validity -- */
+function updateFlashState() {
+  if (state.busy) return;
+  const missing = [];
+  if (!state.selectedPort) missing.push('serial port');
+  if (!$('server').value.trim()) missing.push('server address');
+  if (!$('wifi_ssid').value.trim()) missing.push('Wi-Fi name');
+  if (!$('device_type').value) missing.push('device type');
+  if (!$('device_uid').value.trim()) missing.push('device id');
+
+  const type = currentType();
+  if (type) {
+    for (const field of type.config) {
+      if (field.is_pin) {
+        const input = document.querySelector(`[data-cfg="${CSS.escape(field.key)}"]`);
+        if (input && input.value === '') missing.push(field.label.toLowerCase());
+      }
+    }
+  }
+  $('flash').disabled = missing.length > 0;
+  if (missing.length) {
+    $('flashHint').textContent = 'Still needed: ' + missing.join(', ');
+  } else if (selectedKind() === 'uf2') {
+    $('flashHint').textContent =
+      'Ready. MicroPython is copied to the BOOTSEL drive and the board reboots itself.';
+  } else {
+    $('flashHint').textContent =
+      'Ready. This erases the board and installs MicroPython.';
+  }
+}
+
+/* ------------------------------------------------------------- flashing -- */
+async function startFlash() {
+  clearBanner();
+  state.busy = true;
+  $('flash').disabled = true;
+  $('flash').textContent = 'Flashing…';
+  $('flashHint').textContent = 'Do not unplug the board.';
+  $('progress').classList.remove('hidden');
+  $('logCard').classList.remove('hidden');
+  $('log').textContent = '';
+  $('steps').innerHTML = '';
+
+  const body = {
+    port: state.selectedPort,
+    port_kind: selectedKind(),
+    server: $('server').value.trim(),
+    hub_username: $('hub_username').value.trim(),
+    hub_password: $('hub_password').value,
+    node_id: $('node_id').value.trim(),
+    wifi_ssid: $('wifi_ssid').value,
+    wifi_pass: $('wifi_pass').value,
+    device_type: $('device_type').value,
+    device_uid: $('device_uid').value.trim(),
+    device_name: $('device_name').value.trim(),
+    device_config: collectConfig(),
+  };
+
+  try {
+    const started = await api('/api/flash', { method: 'POST', body });
+    followJob(started.job);
+  } catch (error) {
+    finishFlash();
+    banner('error', error.message);
+  }
+}
+
+function followJob(jobId) {
+  if (state.eventSource) state.eventSource.close();
+  const source = new EventSource('/api/jobs/' + jobId + '/stream');
+  state.eventSource = source;
+  let logCount = 0;
+
+  source.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.steps) renderSteps(payload.steps);
+    if (payload.log) {
+      logCount += 1;
+      appendLog(payload.log);
+    }
+    if (payload.done) {
+      source.close();
+      state.eventSource = null;
+      renderSteps(payload.state.steps);
+      const failed = payload.state.steps.find((step) => step.state === 'failed');
+      finishFlash();
+      if (payload.state.ok) {
+        banner('ok', 'Done. ' + (payload.state.steps.find(s => s.key === 'verify') || {}).detail);
+      } else {
+        banner('error', (failed && failed.detail) || payload.state.error || 'Flashing failed.');
+      }
+    }
+  };
+  source.onerror = () => {
+    // A dropped stream is not necessarily a failed flash; stop following it.
+    source.close();
+    state.eventSource = null;
+    if (state.busy) {
+      finishFlash();
+      banner('warn', 'Lost contact with the flasher. Check its console window.');
+    }
+  };
+}
+
+function renderSteps(steps) {
+  $('steps').innerHTML = steps.map((step) => `
+    <div class="step ${step.state}">
+      <div class="dot"></div>
+      <div>
+        <div class="label">${escapeHtml(step.label)}</div>
+        <div class="detail">${escapeHtml(step.detail || '')}</div>
+      </div>
+      <div class="time">${step.seconds ? step.seconds + 's' : ''}</div>
+    </div>`).join('');
+}
+
+function appendLog(entry) {
+  const log = $('log');
+  const line = document.createElement('div');
+  line.className = entry.level || 'info';
+  line.textContent = entry.text;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function finishFlash() {
+  state.busy = false;
+  $('flash').textContent = 'Flash Micro Controller';
+  updateFlashState();
+}
+
+/* --------------------------------------------------------------- events -- */
+async function loadState() {
+  try {
+    const payload = await api('/api/state');
+    state.types = payload.device_types || [];
+    const missing = Object.entries(payload.tools || {})
+      .filter(([, ok]) => !ok).map(([name]) => name === 'pyserial' ? 'pyserial' : name);
+    if (missing.length) {
+      banner('error', 'Missing Python packages: ' + missing.join(', ') +
+        ' — run: python -m pip install esptool mpremote pyserial');
+    }
+    renderTypes();
+    state.ports = payload.ports || [];
+    if (!state.selectedPort) {
+      const candidate = state.ports.find((port) => port.likely_microcontroller);
+      state.selectedPort = candidate ? candidate.device : null;
+      state.selectedKind = candidate ? (candidate.kind || 'serial') : 'serial';
+    }
+    renderPorts();
+    updateFlashState();
+  } catch (error) {
+    banner('error', 'Cannot reach the flasher: ' + error.message);
+  }
+}
+
+async function rescan() {
+  $('ports').innerHTML = '<div class="empty">Scanning…</div>';
+  try {
+    const payload = await api('/api/state');
+    state.ports = payload.ports || [];
+    if (!state.ports.some((port) => port.device === state.selectedPort)) {
+      const candidate = state.ports.find((port) => port.likely_microcontroller);
+      const fallback = candidate || state.ports[0];
+      state.selectedPort = fallback ? fallback.device : null;
+      state.selectedKind = fallback ? (fallback.kind || 'serial') : 'serial';
+    } else {
+      // Keep the kind in sync in case the same path changed meaning.
+      const current = state.ports.find((port) => port.device === state.selectedPort);
+      if (current) state.selectedKind = current.kind || 'serial';
+    }
+  } catch (error) {
+    banner('error', error.message);
+  }
+  renderPorts();
+  updateFlashState();
+}
+
+async function probe() {
+  $('probe').disabled = true;
+  $('probeResult').textContent = 'Checking…';
+  try {
+    const result = await api('/api/probe', { method: 'POST', body: { port: state.selectedPort } });
+    if (!result.ok) {
+      $('probeResult').textContent = 'No board answered on ' + state.selectedPort + '.';
+      banner('warn', result.output || ('No response on ' + state.selectedPort +
+        '. Check the cable (it must be a data cable), close any serial monitor, or try ' +
+        'another port. For a Pico 2 W: hold BOOT while plugging in.'));
+    } else if (result.kind === 'uf2') {
+      $('probeResult').textContent = (result.model || 'RP2 board') +
+        ' · BOOTSEL drive ready · MicroPython will be installed';
+      clearBanner();
+    } else {
+      $('probeResult').textContent = result.chip +
+        (result.micropython ? ' · MicroPython present' : ' · needs MicroPython (will be installed)');
+      clearBanner();
+    }
+  } catch (error) {
+    $('probeResult').textContent = error.message;
+  } finally {
+    $('probe').disabled = false;
+  }
+}
+
+$('rescan').addEventListener('click', rescan);
+$('probe').addEventListener('click', probe);
+$('flash').addEventListener('click', startFlash);
+for (const id of ['server', 'wifi_ssid', 'device_uid', 'device_type', 'hub_username']) {
+  $(id).addEventListener('input', updateFlashState);
+  $(id).addEventListener('change', updateFlashState);
+}
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !state.busy && !$('flash').disabled) startFlash();
+});
+
+loadState();
+setInterval(() => { if (!state.busy) rescan(); }, 5000);
+</script>
+</body>
+</html>

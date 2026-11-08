@@ -54,6 +54,19 @@ scripts/shots/
 *.png.tmp
 docs/screenshots/*.tmp
 
+# Flasher artefacts: downloaded firmware and browser/headless profiles
+*.bin
+*.uf2
+*.elf
+dbg-*/
+tmp-*/
+sh-layout-*/
+sh-flashui-*/
+sh-users-*/
+sh-tabs-*/
+sh-pwui-*/
+pytest-of-*/
+
 # ---------------------------------------------------------------------------
 # Editors / OS
 # ---------------------------------------------------------------------------

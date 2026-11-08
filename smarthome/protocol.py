@@ -322,8 +322,8 @@ def parse_hello(raw: Mapping[str, Any]) -> Dict[str, Any]:
                 "config": config,
             }
         )
-    if not parsed:
-        raise ProtocolError("node reported no devices")
+    # An empty list is legal: a board can be flashed and enrolled before its
+    # devices are configured, and it will re-announce once they are.
     return {
         "node_id": raw.get("node") if isinstance(raw.get("node"), str) else None,
         "fw": raw.get("fw") if isinstance(raw.get("fw"), str) else "",

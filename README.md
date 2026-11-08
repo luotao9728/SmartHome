@@ -171,6 +171,35 @@ The driver API is:
 
 ## Flashing a node
 
+### The web flasher (easiest)
+
+The board is plugged into *your computer*, not the Pi, so this runs locally:
+
+```bash
+pip install fastapi uvicorn esptool mpremote pyserial
+python tools/flasher.py --open     # http://127.0.0.1:8090
+```
+
+Pick the detected port, fill in the hub address, Wi-Fi, device type and pin,
+then press **Flash Micro Controller**.  Progress streams step by step (detect
+→ erase → get MicroPython → write → wait for REPL → copy firmware → write
+config → reboot → verify) with a live log.
+
+It handles both families:
+
+| Board | How it appears | What happens |
+| --- | --- | --- |
+| ESP32-C6 / C3 / S3 / … | COM port | esptool erases and writes the `.bin` (esptool 4.x and 5.x command names both supported) |
+| Pico 2 W (RP2350) | USB drive in BOOTSEL mode | MicroPython `.uf2` is copied to the drive and the board reboots itself |
+
+For a Pico: **hold BOOT, plug in USB, release BOOT** — it mounts as a drive
+containing `INFO_UF2.TXT`.  There is no COM port in that mode.
+
+The flasher writes `/config.json` and `/devices.json`; `main.py` reads
+`devices.json` first, so you never edit firmware source to add a device.
+
+### The command line
+
 ```bash
 pip install mpremote
 # copy library + boot/main and write /config.json in one go
@@ -321,7 +350,7 @@ micropython/          node firmware
   main.py             per-board device list (the file you edit)
   boot.py             watchdog / safe boot
   shnode/             transport, agent, drivers
-tools/                flash_node.py, fake_node.py (desktop simulator)
+tools/                flasher.py (web UI), flash_node.py, fake_node.py
 deploy/               systemd unit and installer
 scripts/              dev helpers and verification tools
 tests/                unit, API, driver and end-to-end tests

@@ -86,14 +86,19 @@ def detect_port() -> str | None:
     return None
 
 
-def fetch_token(server: str, node_id: str, password: str) -> str:
+def fetch_token(server: str, node_id: str, password: str, username: str = "admin") -> str:
     import urllib.error
     import urllib.request
 
     login_url = server.rstrip("/") + "/api/login"
+    # The username is required once the hub has more than one account; sending
+    # it always is harmless (the hub ignores it when only one account exists).
+    body = {"password": password}
+    if username:
+        body["username"] = username
     request = urllib.request.Request(
         login_url,
-        data=json.dumps({"password": password}).encode(),
+        data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -140,6 +145,8 @@ def main(argv=None) -> int:
     parser.add_argument("--token", default=os.environ.get("SMARTHOME_NODE_TOKEN", ""))
     parser.add_argument("--hub-password", default=None,
                         help="hub admin password; the script asks the hub for a device token")
+    parser.add_argument("--hub-username", default="admin",
+                        help="hub account to log in as (default: admin)")
     parser.add_argument("--devices", default=None,
                         help='JSON device list, e.g. \'[{"type":"relay","uid":"pump","config":{"pin":5}}]\'')
     parser.add_argument("--only-files", action="store_true", help="copy files, do not rewrite config.json")
@@ -159,18 +166,21 @@ def main(argv=None) -> int:
     if args.hub_password:
         if not args.node or not args.server:
             raise SystemExit("--hub-password needs --node and --server")
-        args.token = fetch_token(args.server, args.node, args.hub_password)
+        args.token = fetch_token(args.server, args.node, args.hub_password,
+                                 args.hub_username)
         print("fetched a device token for %s" % args.node)
 
     staging = build(args.devices)
     try:
         print("\n== copying firmware ==")
-        mpremote(["fs mkdir", ":"], port, check=False)
+        # "fs" and the sub-command are separate argv entries: mpremote parses
+        # them individually, so "fs cp" as one string is not a command.
+        mpremote(["fs", "mkdir", ":"], port, check=False)
         for name in DIRECTORIES:
-            mpremote(["fs mkdir", ":" + name], port, check=False)
-            mpremote(["fs cp", "-r", str(staging / name), ":"], port)
+            mpremote(["fs", "mkdir", ":" + name], port, check=False)
+            mpremote(["fs", "cp", "-r", str(staging / name), ":"], port)
         for name in ROOT_FILES:
-            mpremote(["fs cp", str(staging / name), ":" + name], port)
+            mpremote(["fs", "cp", str(staging / name), ":" + name], port)
 
         if not args.only_files:
             if not args.server:

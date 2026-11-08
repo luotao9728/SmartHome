@@ -8,6 +8,7 @@ handled by the library.
     main.REBOOT_ON_ERROR = True
 """
 
+import json
 import sys
 
 # --------------------------------------------------------------------------- #
@@ -15,10 +16,15 @@ import sys
 # --------------------------------------------------------------------------- #
 CONFIG_PATH = "/config.json"
 
-#: One entry per physical device on this board.  Keys of ``config`` match the
-#: ``config`` schema of the device type manifest on the server.
+#: The flasher writes this file; it takes precedence over ``DEVICES`` below so a
+#: board can be provisioned from the web UI without editing any source.
+DEVICES_PATH = "/devices.json"
+
+#: One entry per physical device on this board, used when /devices.json is
+#: absent.  Keys of ``config`` match the ``config`` schema of the device type
+#: manifest on the server.  Safe PWM pins on the C6: 4, 5, 6, 7, 10-22.
 DEVICES = [
-    # {"type": "pwm_led_strip", "uid": "desk-strip", "name": "Desk strip", "config": {"pin": 4, "frequency_hz": 1000}},
+    # {"type": "pwm_led_strip", "uid": "kitchen-strip", "name": "Kitchen Light", "config": {"pin": 4, "frequency_hz": 1000}},
     # {"type": "relay", "uid": "pump-relay", "name": "Pump", "config": {"pin": 5, "active_low": False}},
     # {"type": "button", "uid": "desk-button", "name": "Desk button", "config": {"pin": 9}},
     # {"type": "temperature_sensor", "uid": "room-temp", "name": "Room temperature", "config": {"pin": 6, "interval_s": 15}},
@@ -31,8 +37,23 @@ REBOOT_ON_ERROR = True
 REBOOT_DELAY_MS = 5000
 
 
+def device_entries():
+    """Device definitions: /devices.json when present, else the table above."""
+    try:
+        with open(DEVICES_PATH) as handle:
+            loaded = json.load(handle)
+    except (OSError, ValueError):
+        return DEVICES
+    if isinstance(loaded, list):
+        return loaded
+    if isinstance(loaded, dict) and isinstance(loaded.get("devices"), list):
+        return loaded["devices"]
+    print("main: %s is malformed, using the built-in DEVICES table" % DEVICES_PATH)
+    return DEVICES
+
+
 def build_devices():
-    """Turn the ``DEVICES`` table into driver instances."""
+    """Turn the device table into driver instances."""
     from shnode.devices.button import Button
     from shnode.devices.pwm_led_strip import PwmLedStrip
     from shnode.devices.relay import Relay
@@ -47,7 +68,9 @@ def build_devices():
         "rgb_led_strip": RgbLedStrip,
     }
     devices = []
-    for entry in DEVICES:
+    for entry in device_entries():
+        if not isinstance(entry, dict):
+            continue
         type_id = entry.get("type")
         driver = registry.get(type_id)
         if driver is None:
