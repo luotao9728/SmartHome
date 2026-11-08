@@ -1,0 +1,11 @@
+# Development and test dependencies
+-r requirements.txt
+pytest>=7.4
+pytest-asyncio>=0.23
+httpx>=0.27
+websockets>=12.0
+
+# Optional, for flashing boards over USB:
+#   mpremote>=1.22
+# Optional, for the browser UI checks in scripts/ui_test.py:
+#   (uses an installed Edge/Chrome, no Python package needed)

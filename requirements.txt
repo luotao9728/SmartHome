@@ -1,0 +1,10 @@
+# SmartHome hub - Python dependencies
+#
+# The hub is deliberately slim: a web framework and its ASGI server.  Anything
+# else (cryptography, websockets via uvicorn's standard extra) is standard
+# library or bundled.
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+
+# Development / testing only (the hub itself never imports these):
+#   pip install -r requirements-dev.txt

@@ -1,0 +1,50 @@
+{
+  "id": "rgb_led_strip",
+  "name": "RGB LED Strip",
+  "version": 1,
+  "category": "light",
+  "icon": "bulb",
+  "order": 11,
+  "description": "Three channel RGB strip driven by three MOSFETs. Included as an example of a richer device type.",
+  "properties": {
+    "power": {"type": "bool", "default": false, "control": "switch", "label": "Power"},
+    "brightness": {
+      "type": "int",
+      "min": 0,
+      "max": 100,
+      "default": 100,
+      "unit": "%",
+      "control": "slider",
+      "label": "Brightness"
+    },
+    "color": {
+      "type": "string",
+      "default": "#ffd7a3",
+      "control": "color",
+      "label": "Colour"
+    },
+    "effect": {
+      "type": "enum",
+      "default": "solid",
+      "control": "select",
+      "label": "Effect",
+      "options": [
+        {"value": "solid", "label": "Solid"},
+        {"value": "breathe", "label": "Breathe"},
+        {"value": "strobe", "label": "Strobe"},
+        {"value": "rainbow", "label": "Rainbow"}
+      ]
+    }
+  },
+  "config": {
+    "pin_r": {"type": "int", "min": 0, "max": 48, "default": 4, "required": true, "label": "Red pin"},
+    "pin_g": {"type": "int", "min": 0, "max": 48, "default": 5, "required": true, "label": "Green pin"},
+    "pin_b": {"type": "int", "min": 0, "max": 48, "default": 6, "required": true, "label": "Blue pin"},
+    "frequency_hz": {"type": "int", "min": 60, "max": 20000, "default": 1000, "unit": "Hz", "label": "PWM frequency"},
+    "gamma": {"type": "float", "min": 1.0, "max": 3.0, "default": 2.2, "label": "Gamma correction"}
+  },
+  "actions": {
+    "identify": {"label": "Blink", "args": {}}
+  },
+  "events": {}
+}

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>SmartHome</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b82f6'/%3E%3Cpath d='M16 6l8 6v10l-8 4-8-4V12z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="9" fill="url(#g)"/>
+          <path d="M16 6.5l7.5 5.3v8.4L16 25.5l-7.5-5.3v-8.4z" fill="#fff" fill-opacity=".92"/>
+          <path d="M16 11.5l3.8 2.7v4.2L16 21l-3.8-2.6v-4.2z" fill="#3b82f6"/>
+          <defs><linearGradient id="g" x1="0" y1="0" x2="32" y2="32">
+            <stop stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/>
+          </linearGradient></defs>
+        </svg>
+        <div class="brand-text">
+          <h1 id="app-title">SmartHome</h1>
+          <span id="conn-status" class="conn offline"><i></i><span>connecting…</span></span>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button class="icon-btn" id="btn-refresh" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 11-5 5H5a7 7 0 107-7z"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-theme" title="Toggle theme" aria-label="Toggle theme">
+          <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9 7 7 0 01-9-9z"/></svg>
+        </button>
+        <button class="btn primary" id="btn-add">
+          <svg viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+          Add device
+        </button>
+        <button class="icon-btn" id="btn-menu" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 104 4 4 4 0 00-4-4zm8.9 4a7.7 7.7 0 01-.1 1.2l2 1.6-2 3.4-2.4-1a7.7 7.7 0 01-2 1.2l-.4 2.6h-4l-.4-2.6a7.7 7.7 0 01-2-1.2l-2.4 1-2-3.4 2-1.6A7.7 7.7 0 013.1 12a7.7 7.7 0 01.1-1.2l-2-1.6 2-3.4 2.4 1a7.7 7.7 0 012-1.2L8 3h4l.4 2.6a7.7 7.7 0 012 1.2l2.4-1 2 3.4-2 1.6a7.7 7.7 0 01.1 1.2z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section class="overview" id="overview">
+        <div class="stat"><span id="stat-devices">0</span><small>devices</small></div>
+        <div class="stat"><span id="stat-online">0</span><small>online</small></div>
+        <div class="stat"><span id="stat-nodes">0</span><small>nodes</small></div>
+        <div class="stat warn" id="stat-enroll" hidden><span>Enrolling</span><small><span id="enroll-left">–</span>s left</small></div>
+      </section>
+
+      <div class="notice" id="type-errors" hidden></div>
+
+      <section class="room" id="devices"></section>
+
+      <section class="empty" id="empty-state" hidden>
+        <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 8l20 12v24L32 56 12 44V20z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M32 22v12m0 6v2" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <h2>No devices yet</h2>
+        <p>Flash a microcontroller with the SmartHome firmware and let it connect, or add a device manually.</p>
+        <div class="row">
+          <button class="btn primary" id="btn-empty-add">Add device</button>
+          <button class="btn" id="btn-empty-enroll">Allow new devices</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span id="footer-info"></span>
+      <button class="link" id="btn-events">Activity log</button>
+    </footer>
+  </div>
+
+  <!-- device card template -->
+  <template id="tpl-device">
+    <article class="card" data-uid="">
+      <header class="card-head">
+        <span class="card-icon" data-icon></span>
+        <div class="card-title">
+          <h3 data-name></h3>
+          <span class="card-sub" data-sub></span>
+        </div>
+        <span class="badge" data-badge></span>
+        <button class="icon-btn small" data-menu title="Device settings" aria-label="Device settings">
+          <svg viewBox="0 0 24 24"><path d="M6 10a2 2 0 102 2 2 2 0 00-2-2zm6 0a2 2 0 102 2 2 2 0 00-2-2zm6 0a2 2 0 102 2 2 2 0 00-2-2z"/></svg>
+        </button>
+      </header>
+      <div class="card-body" data-controls></div>
+      <footer class="card-foot" data-foot hidden></footer>
+    </article>
+  </template>
+
+  <!-- dialog shell -->
+  <dialog id="dialog" class="dialog">
+    <!-- novalidate: the server is the authority on ranges, and native
+         validation on a hidden tab would block the form with a message the
+         browser cannot even focus ("invalid form control is not focusable").
+         Errors come back as toasts instead. -->
+    <form method="dialog" class="dialog-inner" id="dialog-form" novalidate>
+      <header><h2 id="dialog-title"></h2><button type="submit" class="icon-btn small" value="cancel" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12 19 6.4 17.6 5 12 10.6z"/></svg>
+      </button></header>
+      <div class="dialog-body" id="dialog-body"></div>
+      <footer id="dialog-actions"></footer>
+    </form>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

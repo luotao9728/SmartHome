@@ -1,0 +1,98 @@
+{
+  "id": "pwm_led_strip",
+  "name": "PWM LED Strip",
+  "version": 1,
+  "category": "light",
+  "icon": "strip",
+  "order": 10,
+  "description": "Single channel 24V LED strip dimmed with a low-side N-channel MOSFET (e.g. AOD4184).",
+  "properties": {
+    "power": {
+      "type": "bool",
+      "default": false,
+      "control": "switch",
+      "label": "Power"
+    },
+    "brightness": {
+      "type": "int",
+      "min": 0,
+      "max": 100,
+      "default": 100,
+      "unit": "%",
+      "control": "slider",
+      "label": "Brightness"
+    },
+    "fade_ms": {
+      "type": "int",
+      "min": 0,
+      "max": 10000,
+      "default": 400,
+      "unit": "ms",
+      "control": "number",
+      "label": "Fade time",
+      "advanced": true
+    },
+    "frequency_hz": {
+      "type": "int",
+      "min": 60,
+      "max": 20000,
+      "default": 1000,
+      "unit": "Hz",
+      "control": "number",
+      "label": "PWM frequency",
+      "advanced": true,
+      "settable": true
+    }
+  },
+  "config": {
+    "pin": {
+      "type": "int",
+      "min": 0,
+      "max": 48,
+      "default": 4,
+      "required": true,
+      "label": "PWM pin"
+    },
+    "channel": {
+      "type": "int",
+      "min": 0,
+      "max": 15,
+      "default": 0,
+      "label": "PWM slice"
+    },
+    "active_low": {
+      "type": "bool",
+      "default": false,
+      "label": "Inverted output"
+    },
+    "gamma": {
+      "type": "float",
+      "min": 1.0,
+      "max": 3.0,
+      "default": 2.2,
+      "label": "Gamma correction"
+    },
+    "max_duty": {
+      "type": "int",
+      "min": 1,
+      "max": 100,
+      "default": 100,
+      "unit": "%",
+      "label": "Max duty limit"
+    }
+  },
+  "actions": {
+    "identify": {
+      "label": "Blink",
+      "description": "Flash the strip three times so you can find it.",
+      "args": {}
+    },
+    "toggle": {
+      "label": "Toggle",
+      "args": {}
+    }
+  },
+  "events": {
+    "overheat": {"label": "Over-temperature"}
+  }
+}

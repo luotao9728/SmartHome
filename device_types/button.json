@@ -1,0 +1,66 @@
+{
+  "id": "button",
+  "name": "Button / Input",
+  "version": 1,
+  "category": "sensor",
+  "icon": "button",
+  "order": 40,
+  "description": "Physical push button wired between a GPIO and ground. Reports presses and can link to another device.",
+  "properties": {
+    "pressed": {
+      "type": "bool",
+      "default": false,
+      "control": "readonly",
+      "label": "Pressed",
+      "settable": false
+    },
+    "presses": {
+      "type": "int",
+      "min": 0,
+      "max": 1000000000,
+      "default": 0,
+      "control": "readonly",
+      "label": "Press count",
+      "settable": false
+    }
+  },
+  "config": {
+    "pin": {
+      "type": "int",
+      "min": 0,
+      "max": 48,
+      "default": 9,
+      "required": true,
+      "label": "Input pin"
+    },
+    "debounce_ms": {
+      "type": "int",
+      "min": 5,
+      "max": 1000,
+      "default": 50,
+      "unit": "ms",
+      "label": "Debounce"
+    },
+    "invert": {
+      "type": "bool",
+      "default": true,
+      "label": "Active low (pull-up)"
+    },
+    "long_press_ms": {
+      "type": "int",
+      "min": 200,
+      "max": 10000,
+      "default": 800,
+      "unit": "ms",
+      "label": "Long press"
+    }
+  },
+  "actions": {},
+  "events": {
+    "press": {"label": "Press"},
+    "release": {"label": "Release"},
+    "long_press": {"label": "Long press"},
+    "click": {"label": "Click"},
+    "double_click": {"label": "Double click"}
+  }
+}

@@ -1,0 +1,38 @@
+[Unit]
+Description=SmartHome hub
+Documentation=file:///opt/smarthome/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smarthome
+Group=smarthome
+WorkingDirectory=/opt/smarthome
+Environment=PYTHONUNBUFFERED=1
+Environment=SMARTHOME_CONFIG=/var/lib/smarthome/config.json
+# Wait for a working network (and DNS for the hostname) before starting.
+ExecStartPre=/bin/sh -c 'until ping -c1 -W2 $(hostname -I | awk "{print \$1}") >/dev/null 2>&1; do sleep 1; done'
+ExecStart=/usr/bin/python3 -m smarthome serve --host 0.0.0.0 --port 8080 --log-file
+Restart=always
+RestartSec=3
+# Give the hub time to say goodbye to boards and flush the database.
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+# Hardening: the hub only needs to read its own code and write its data dir.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/smarthome
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,61 @@
+{
+  "id": "relay",
+  "name": "Relay / Switch",
+  "version": 1,
+  "category": "switch",
+  "icon": "relay",
+  "order": 20,
+  "description": "On/off output such as a mains relay board, a contactor or a 24V valve.",
+  "properties": {
+    "power": {
+      "type": "bool",
+      "default": false,
+      "control": "switch",
+      "label": "State"
+    },    "auto_off_s": {
+      "type": "int",
+      "min": 0,
+      "max": 86400,
+      "default": 0,
+      "unit": "s",
+      "control": "number",
+      "label": "Auto-off after",
+      "description": "Turn the relay off automatically after this many seconds (0 disables).",
+      "advanced": true
+    }
+  },
+  "config": {
+    "pin": {
+      "type": "int",
+      "min": 0,
+      "max": 48,
+      "default": 5,
+      "required": true,
+      "label": "Output pin"
+    },
+    "active_low": {
+      "type": "bool",
+      "default": false,
+      "label": "Active low"
+    }
+  },
+  "actions": {
+    "pulse": {
+      "label": "Pulse",
+      "description": "Switch on for a moment (door bell, garage door).",
+      "args": {
+        "ms": {
+          "type": "int",
+          "min": 50,
+          "max": 10000,
+          "default": 500,
+          "unit": "ms",
+          "label": "Duration"
+        }
+      }
+    }
+  },
+  "events": {
+    "switched": {"label": "Switched"}
+  }
+}

@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Virtualenvs (the hub's and the MicroPython test environment)
+.venv/
+venv/
+env/
+mpyenv/
+py39/
+py312/
+micropython/.venv/
+
+# ---------------------------------------------------------------------------
+# Local state and secrets — never commit these
+# ---------------------------------------------------------------------------
+# The hub creates these on first run; config.json holds the admin password
+# hash, the session secret and the API key.
+config.json
+*.db
+*.db-wal
+*.db-shm
+*.log
+.token
+devkey.txt
+devdata.txt
+.env
+
+# Firmware secrets copied off a board
+**/config.json
+!device_types/*.json
+
+# ---------------------------------------------------------------------------
+# MicroPython build output
+# ---------------------------------------------------------------------------
+*.mpy
+micropython/**/*.mpy
+
+# ---------------------------------------------------------------------------
+# Tooling output
+# ---------------------------------------------------------------------------
+scripts/shots/
+*.png.tmp
+docs/screenshots/*.tmp
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

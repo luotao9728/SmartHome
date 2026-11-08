@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>Sign in · SmartHome</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b82f6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-page">
+  <main class="login">
+    <div class="login-card">
+      <svg class="login-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <rect width="32" height="32" rx="9" fill="url(#g2)"/>
+        <path d="M16 6.5l7.5 5.3v8.4L16 25.5l-7.5-5.3v-8.4z" fill="#fff" fill-opacity=".92"/>
+        <path d="M16 11.5l3.8 2.7v4.2L16 21l-3.8-2.6v-4.2z" fill="#3b82f6"/>
+        <defs><linearGradient id="g2" x1="0" y1="0" x2="32" y2="32">
+          <stop stop-color="#3b82f6"/><stop offset="1" stop-color="#8b5cf6"/>
+        </linearGradient></defs>
+      </svg>
+      <h1>SmartHome</h1>
+      <p class="muted">Enter the admin password to continue.</p>
+      <form id="login-form" autocomplete="on">
+        <label class="field">
+          <span>Password</span>
+          <input type="password" id="password" name="password" autocomplete="current-password"
+                 autofocus required minlength="1" placeholder="••••••••">
+        </label>
+        <p class="error" id="login-error" role="alert" hidden></p>
+        <button class="btn primary wide" id="login-submit" type="submit">Sign in</button>
+      </form>
+      <p class="hint">Forgot it? Run <code>python -m smarthome set-password</code> on the Raspberry Pi.</p>
+    </div>
+  </main>
+  <script>
+    const form = document.getElementById('login-form');
+    const error = document.getElementById('login-error');
+    const submit = document.getElementById('login-submit');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      error.hidden = true;
+      submit.disabled = true;
+      submit.textContent = 'Signing in…';
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: document.getElementById('password').value }),
+        });
+        if (response.ok) {
+          location.replace('/');
+          return;
+        }
+        const detail = await response.json().catch(() => ({}));
+        error.textContent = detail.error || ('Sign in failed (' + response.status + ')');
+        error.hidden = false;
+      } catch (err) {
+        error.textContent = 'Cannot reach the server.';
+        error.hidden = false;
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>

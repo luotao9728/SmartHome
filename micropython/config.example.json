@@ -1,0 +1,29 @@
+# Example node configuration — copy to the board as /config.json
+#
+# You normally do not write this by hand: `tools/flash_node.py` creates it, and
+# a board enrolled through the UI writes its own token back into it.
+#
+# Keys:
+#   wifi_ssid / wifi_pass   your 2.4 GHz network (the C6 has no 5 GHz radio)
+#   server                  the hub's base URL, no trailing slash, no /ws path
+#   node_id                 a name for this board; must be unique across the hub
+#   token                   from the UI (Add device -> Allow new devices),
+#                           `python -m smarthome node-token <id>`, or
+#                           `tools/flash_node.py --hub-password ...`
+#   heartbeat_s             hub ping interval (seconds)
+#   report_s                full state report interval (seconds)
+#   request_timeout_s       connect/handshake timeout (seconds)
+#
+# Optional:
+#   static_ip, netmask, gateway, dns   pin the address instead of using DHCP
+#   ap_fallback                        start a fallback AP when Wi-Fi fails
+{
+  "wifi_ssid": "MyNetwork",
+  "wifi_pass": "MyPassword",
+  "server": "http://192.168.1.20:8080",
+  "node_id": "esp32-desk",
+  "token": "",
+  "heartbeat_s": 10,
+  "report_s": 30,
+  "request_timeout_s": 20
+}
