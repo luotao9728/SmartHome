@@ -458,7 +458,7 @@ function updateCard(card, device) {
     if (!error) {
       const element = document.createElement('div');
       element.className = 'card-error';
-      element.innerHTML = '<span class="grow"></span><button class="icon-btn small" aria-label="Dismiss">&#10005;</button>';
+      element.innerHTML = '<span class="grow"></span><button type="button" class="icon-btn small" aria-label="Dismiss">&#10005;</button>';
       $('.card-head', card).after(element);
       $('button', element).addEventListener('click', () => {
         state.dismissedErrors.add(device.uid);
@@ -491,7 +491,7 @@ function updateCard(card, device) {
     if (foot.dataset.actions !== signatureActions) {
       foot.dataset.actions = signatureActions;
       foot.innerHTML = actions.map(([name, spec]) =>
-        `<button class="btn sm ghost" data-action="${escapeHtml(name)}">${escapeHtml(spec.label || name)}</button>`
+        `<button type="button" class="btn sm ghost" data-action="${escapeHtml(name)}">${escapeHtml(spec.label || name)}</button>`
       ).join('') + '<span class="grow"></span><span data-updated></span>';
     }
     $('[data-updated]', foot).textContent = device.online ? 'synced ' + relTime(device.updated) : 'last seen ' + relTime(device.updated);
@@ -539,7 +539,7 @@ function buildControlsMarkup(device) {
       const switchLabel = escapeHtml(spec.label || (key === 'power' ? 'Power' : prettyName(key)));
       html.push(`<div class="switch-row" data-control-row="${escapeHtml(key)}">
         <span class="switch-label">${switchLabel}</span>
-        <button class="switch" role="switch" aria-checked="false" aria-label="${switchLabel}"
+        <button type="button" class="switch" role="switch" aria-checked="false" aria-label="${switchLabel}"
                 data-prop="${escapeHtml(key)}" data-kind="bool" ${settable ? '' : 'disabled'}></button>
       </div>`);
     } else if (control === 'slider') {
@@ -862,9 +862,9 @@ function openDeviceDialog(uid) {
 function renderDeviceDialog(device, type) {
   const tabs = `
     <div class="tabs" role="tablist">
-      <button role="tab" aria-selected="true" data-tab="general">General</button>
-      <button role="tab" aria-selected="false" data-tab="hardware">Hardware</button>
-      <button role="tab" aria-selected="false" data-tab="advanced">Advanced</button>
+      <button type="button" role="tab" aria-selected="true" data-tab="general">General</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="hardware">Hardware</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="advanced">Advanced</button>
     </div>`;
 
   const hardware = type ? Object.entries(type.config || {}) : [];
@@ -1246,12 +1246,12 @@ function paintSettingsDialog() {
   const enrollment = state.enrollment;
   body.innerHTML = `
     <div class="tabs" role="tablist">
-      <button role="tab" aria-selected="true" data-tab="network">Network</button>
-      <button role="tab" aria-selected="false" data-tab="nodes">Nodes</button>
-      <button role="tab" aria-selected="false" data-tab="types">Device types</button>
-      <button role="tab" aria-selected="false" data-tab="account">Account</button>
+      <button type="button" role="tab" aria-selected="true" data-tab="network">Network</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="nodes">Nodes</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="types">Device types</button>
+      <button type="button" role="tab" aria-selected="false" data-tab="account">Account</button>
       ${state.user && state.user.role === 'admin'
-        ? '<button role="tab" aria-selected="false" data-tab="users">Users</button>' : ''}
+        ? '<button type="button" role="tab" aria-selected="false" data-tab="users">Users</button>' : ''}
     </div>
     <section data-panel="network">
       <div class="field-row">
@@ -1279,10 +1279,10 @@ function paintSettingsDialog() {
       <div class="field">
         <span>Pair a new microcontroller</span>
         <div class="chip-row">
-          <button class="btn sm primary" data-enroll ${enrollment.open ? 'disabled' : ''}>
+          <button type="button" class="btn sm primary" data-enroll ${enrollment.open ? 'disabled' : ''}>
             ${enrollment.open ? 'Enrolling (' + Math.round(enrollment.seconds_left) + 's)' : 'Allow new devices for 2 min'}
           </button>
-          ${enrollment.open ? '<button class="btn sm" data-enroll-close>Stop</button>' : ''}
+          ${enrollment.open ? '<button type="button" class="btn sm" data-enroll-close>Stop</button>' : ''}
         </div>
         <span class="hint">While the window is open, a board with no token is issued one automatically.</span>
       </div>
@@ -1297,14 +1297,14 @@ function paintSettingsDialog() {
             </div>
           </div>
           <div class="chip-row">
-            <button class="btn sm" data-node-token="${escapeHtml(node.node_id)}">Token</button>
-            <button class="btn sm danger" data-node-delete="${escapeHtml(node.node_id)}">Forget</button>
+            <button type="button" class="btn sm" data-node-token="${escapeHtml(node.node_id)}">Token</button>
+            <button type="button" class="btn sm danger" data-node-delete="${escapeHtml(node.node_id)}">Forget</button>
           </div>
         </div>`).join('') : '<p class="muted">No nodes have connected yet.</p>'}
     </section>
     <section data-panel="types" hidden>
       <div class="chip-row">
-        <button class="btn sm" data-types-reload>Reload manifests</button>
+        <button type="button" class="btn sm" data-types-reload>Reload manifests</button>
       </div>
       <div class="log-list">
         ${[...state.types.values()].map((type) => `
@@ -1391,8 +1391,8 @@ async function loadUsers(root) {
           ${user.display_name ? `<span class="muted">${escapeHtml(user.display_name)}</span>` : ''}
           <span class="muted" style="font-size:12px">last login: ${escapeHtml(last)}</span>
           <span style="flex:1"></span>
-          <button class="btn sm" data-user-reset="${escapeHtml(user.username)}">Reset password</button>
-          ${isSelf ? '' : `<button class="btn sm danger" data-user-delete="${escapeHtml(user.username)}">Delete</button>`}
+          <button type="button" class="btn sm" data-user-reset="${escapeHtml(user.username)}">Reset password</button>
+          ${isSelf ? '' : `<button type="button" class="btn sm danger" data-user-delete="${escapeHtml(user.username)}">Delete</button>`}
         </div>
       </div>`;
     }).join('') || '<p class="muted">No accounts.</p>';
@@ -1589,7 +1589,7 @@ async function showNodeToken(nodeId) {
       body: `<p class="muted" style="margin:0;font-size:13px">Paste this into the board's <code>/config.json</code>
               (any existing token for this node stops working).</p>
             <div class="token-box">${escapeHtml(result.token)}</div>
-            <div class="snippet">${escapeHtml(snippet)}<button class="btn sm snippet-copy" data-copy>Copy</button></div>`,
+            <div class="snippet">${escapeHtml(snippet)}<button type="button" class="btn sm snippet-copy" data-copy>Copy</button></div>`,
       actions: [{ label: 'Done', style: 'primary', onClick: () => closeDialog() }],
     });
     $('[data-copy]').addEventListener('click', () => copyText(snippet));
