@@ -129,7 +129,9 @@ code { font-family: var(--mono); font-size: .88em; background: var(--bg-sunken);
   border-bottom: 1px solid var(--border);
 }
 
-.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* The brand gives up space first: it shrinks and ellipsises its title so the
+   toolbar (and its buttons) always fit. */
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 auto; }
 .brand-mark { width: 38px; height: 38px; border-radius: 12px; flex: none; box-shadow: var(--shadow); }
 .brand-text { min-width: 0; }
 .brand-text h1 {
@@ -156,7 +158,16 @@ code { font-family: var(--mono); font-size: .88em; background: var(--bg-sunken);
 .conn.online i { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
 .conn.offline i { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
 
-.toolbar { display: flex; align-items: center; gap: 8px; }
+.toolbar { display: flex; align-items: center; gap: 8px; flex: none; }
+
+/* The "Add device" label is a <span> (see index.html) so it can be hidden and
+   the button reduced to its "+" icon when the top bar runs out of room. */
+#btn-add span {
+  display: inline-block;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 main {
   flex: 1;
@@ -201,6 +212,9 @@ main {
   transition: background .15s, border-color .15s, transform .06s, box-shadow .15s;
   white-space: nowrap;
   user-select: none;
+  /* Let the toolbar shrink the button before it overflows the top bar. */
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .btn:hover { background: var(--bg-hover); }
 .btn:active { transform: translateY(1px); }
@@ -811,16 +825,39 @@ input[type="color"]::-moz-color-swatch { border: 0; border-radius: 6px; }
 }
 
 /* ------------------------------------------------------------ responsive -- */
+
+/* Collapse "Add device" to just "+" whenever the top bar is too narrow to fit
+   the words.  A container query reacts to the space actually available (a long
+   hub title or a wide phone in portrait both matter), whereas a viewport media
+   query only knows the screen width.  The @media fallback below covers browsers
+   without container query support. */
+.topbar { container-type: inline-size; container-name: topbar; }
+
+@container topbar (max-width: 460px) {
+  #btn-add span { display: none; }
+  #btn-add { padding: 0; width: 40px; flex: none; }
+}
+
+@container topbar (min-width: 461px) {
+  #btn-add span { display: inline-block; }
+}
+
 @media (max-width: 640px) {
   :root { --gap: 12px; }
   .brand-text h1 { font-size: 16px; }
   .grid { grid-template-columns: 1fr; }
-  #btn-add span, .toolbar .btn.primary span { display: none; }
-  .toolbar .btn.primary { width: 40px; padding: 0; }
   .overview { gap: 8px; }
   .stat { padding: 7px 12px; }
   .field-row { grid-template-columns: 1fr; }
   main { padding-bottom: 110px; }
+}
+
+/* Fallback for browsers without container queries. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 460px) {
+    #btn-add span { display: none; }
+    #btn-add { padding: 0; width: 40px; flex: none; }
+  }
 }
 
 @media (min-width: 1000px) {
