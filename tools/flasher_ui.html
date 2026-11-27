@@ -183,8 +183,14 @@
 
   <div class="row" style="margin: 22px 0 8px">
     <button id="flash" class="primary" type="button" disabled>Flash Micro Controller</button>
+    <button id="configure" type="button" disabled>Update Settings Only</button>
     <span id="flashHint" class="hint">Fill in the form above.</span>
   </div>
+  <p class="hint" style="margin:0 0 8px">
+    <b>Update Settings Only</b> writes <code>config.json</code> and
+    <code>devices.json</code> to a board that already runs MicroPython — no
+    erasing, no firmware download. Use it to fix Wi-Fi or change the pin.
+  </p>
 
   <div id="progress" class="card hidden">
     <h2>Progress</h2>
@@ -369,6 +375,7 @@ function updateFlashState() {
     }
   }
   $('flash').disabled = missing.length > 0;
+  $('configure').disabled = missing.length > 0;
   if (missing.length) {
     $('flashHint').textContent = 'Still needed: ' + missing.join(', ');
   } else if (selectedKind() === 'uf2') {
@@ -381,18 +388,8 @@ function updateFlashState() {
 }
 
 /* ------------------------------------------------------------- flashing -- */
-async function startFlash() {
-  clearBanner();
-  state.busy = true;
-  $('flash').disabled = true;
-  $('flash').textContent = 'Flashing…';
-  $('flashHint').textContent = 'Do not unplug the board.';
-  $('progress').classList.remove('hidden');
-  $('logCard').classList.remove('hidden');
-  $('log').textContent = '';
-  $('steps').innerHTML = '';
-
-  const body = {
+function formBody() {
+  return {
     port: state.selectedPort,
     port_kind: selectedKind(),
     server: $('server').value.trim(),
@@ -406,6 +403,43 @@ async function startFlash() {
     device_name: $('device_name').value.trim(),
     device_config: collectConfig(),
   };
+}
+
+/* Write only the settings, for a board that already runs MicroPython. */
+async function updateSettings() {
+  clearBanner();
+  state.busy = true;
+  $('flash').disabled = true;
+  $('configure').disabled = true;
+  $('configure').textContent = 'Updating…';
+  $('flashHint').textContent = 'Writing config to the board…';
+
+  try {
+    const result = await api('/api/configure', { method: 'POST', body: formBody() });
+    banner('ok', 'Settings written to ' + result.port + ' and the board rebooted. '
+      + 'Watch it connect on the hub.');
+  } catch (error) {
+    banner('error', error.message);
+  } finally {
+    state.busy = false;
+    $('configure').textContent = 'Update Settings Only';
+    updateFlashState();
+  }
+}
+
+async function startFlash() {
+  clearBanner();
+  state.busy = true;
+  $('flash').disabled = true;
+  $('configure').disabled = true;
+  $('flash').textContent = 'Flashing…';
+  $('flashHint').textContent = 'Do not unplug the board.';
+  $('progress').classList.remove('hidden');
+  $('logCard').classList.remove('hidden');
+  $('log').textContent = '';
+  $('steps').innerHTML = '';
+
+  const body = formBody();
 
   try {
     const started = await api('/api/flash', { method: 'POST', body });
@@ -478,6 +512,7 @@ function finishFlash() {
   state.busy = false;
   $('flash').textContent = 'Flash Micro Controller';
   updateFlashState();
+  $('configure').disabled = $('flash').disabled;
 }
 
 /* --------------------------------------------------------------- events -- */
@@ -537,6 +572,11 @@ async function probe() {
       banner('warn', result.output || ('No response on ' + state.selectedPort +
         '. Check the cable (it must be a data cable), close any serial monitor, or try ' +
         'another port. For a Pico 2 W: hold BOOT while plugging in.'));
+    } else if (result.micropython && !result.chip) {
+      // Running firmware, not a bootloader: flashing handles the reboot.
+      $('probeResult').textContent = 'MicroPython running · will restart to flash';
+      banner('warn', result.notice || ('MicroPython is already running on ' +
+        state.selectedPort + '. Pressing Flash will restart it into the bootloader.'));
     } else if (result.kind === 'uf2') {
       $('probeResult').textContent = (result.model || 'RP2 board') +
         ' · BOOTSEL drive ready · MicroPython will be installed';
@@ -556,6 +596,7 @@ async function probe() {
 $('rescan').addEventListener('click', rescan);
 $('probe').addEventListener('click', probe);
 $('flash').addEventListener('click', startFlash);
+$('configure').addEventListener('click', updateSettings);
 for (const id of ['server', 'wifi_ssid', 'device_uid', 'device_type', 'hub_username']) {
   $(id).addEventListener('input', updateFlashState);
   $(id).addEventListener('change', updateFlashState);

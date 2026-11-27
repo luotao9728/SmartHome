@@ -748,18 +748,109 @@ class FlashJob:
         return self.order[0]
 
     # -- steps ----------------------------------------------------------- #
+    def _detect_chip(self, port: str) -> "tuple[Optional[str], str]":
+        """Identify the chip on ``port``.
+
+        The C6 and other native-USB parts have no DTR/RTS lines, so the default
+        reset cannot work; ``--before usb-reset`` resets through the USB stack
+        instead.  Boards with a USB-serial bridge ignore the option harmlessly,
+        so it is always passed.
+        """
+        code, output = self.runner.capture(
+            self._esptool() + ["--port", port, "--before", "usb-reset",
+                               esptool_cmd("flash_id", self.runner)]
+        )
+        return parse_chip(output), output
+
+    def _enter_bootloader(self, port: str) -> None:
+        """Ask a board that is already running MicroPython to reboot into ROM.
+
+        A board with MicroPython on it enumerates as a CDC device that esptool
+        cannot drive, so flashing a *working* board used to require holding BOOT
+        by hand -- impossible on a C6 devkit with no buttons.  ``mpremote
+        bootloader`` is the supported way: it runs ``machine.bootloader()`` and
+        waits for the port to drop.  The board then comes back as the ROM
+        downloader, usually on a different COM number.
+        """
+        self.emit("info", "the board is running MicroPython; asking it to restart "
+                          "into the bootloader", "detect")
+        self.runner.capture(
+            self._mpremote() + ["connect", port, "bootloader"],
+            timeout=30,
+        )
+        # The CDC interface has to disappear before the ROM enumerates.
+        time.sleep(1.0)
+
+    def _wait_for_bootloader(self, old_port: str) -> Optional[str]:
+        """Poll for a port esptool can identify, after a bootloader reboot.
+
+        The board re-enumerates as a *different* USB device (the ROM downloader
+        instead of the MicroPython CDC serial), usually on a new COM number, and
+        that takes several seconds.  The old port is dropped from the candidate
+        list after the first failed attempt so the remaining time is not spent
+        re-probing a port that no longer exists.
+        """
+        deadline = time.monotonic() + 45
+        tried_old = False
+        seen = set()
+        while time.monotonic() < deadline:
+            time.sleep(1.5)
+            candidates = []
+            if old_port and not tried_old:
+                candidates.append(old_port)
+            for port in list_ports():
+                if port.get("kind", "serial") != "serial":
+                    continue
+                if not port.get("likely_microcontroller"):
+                    continue
+                if port["device"] not in seen or port["device"] != old_port:
+                    candidates.append(port["device"])
+            # Keep the order stable but drop duplicates.
+            ordered = []
+            for device in candidates:
+                if device not in ordered:
+                    ordered.append(device)
+            for candidate in ordered:
+                chip, _ = self._detect_chip(candidate)
+                if chip:
+                    return candidate
+                if candidate == old_port:
+                    tried_old = True
+                seen.add(candidate)
+        return None
+
     def _step_detect(self, req: Dict[str, Any]) -> None:
         self._begin("detect", req["port"])
-        code, output = self.runner.capture(
-            self._esptool() + ["--port", req["port"], esptool_cmd("flash_id", self.runner)]
-        )
-        chip = parse_chip(output)
+        chip, output = self._detect_chip(req["port"])
+
         if not chip:
-            tail = " | ".join(output.strip().splitlines()[-3:])
+            # Maybe MicroPython is already running and holding the port.
+            self._enter_bootloader(req["port"])
+            found = self._wait_for_bootloader(req["port"])
+            if found:
+                chip, output = self._detect_chip(found)
+                if chip:
+                    self.emit("info", "board restarted into the bootloader on %s"
+                              % found, "detect")
+                    req["port"] = found
+
+        if not chip:
+            # Keep the meaningful lines only: esptool mixes its banner, the real
+            # error and a hexdump of the rom, and the tail is where the error is.
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            interesting = [line for line in lines
+                           if "ERROR" in line.upper() or "Could not" in line
+                           or "busy" in line.lower() or "Failed" in line
+                           or "timeout" in line.lower()
+                           or "A fatal error" in line]
+            tail = " | ".join((interesting or lines)[-3:])
+            hint = "the board did not restart into the bootloader"
+            if "timeout" in output.lower():
+                hint = ("the board stopped responding while restarting. Unplug "
+                        "the USB cable for a few seconds and plug it back in")
             raise FlashError(
-                "could not talk to a microcontroller on %s. %s "
-                "(check the port, close any serial monitor, and make sure the "
-                "board is in bootloader/download mode)" % (req["port"], tail)
+                "could not talk to a microcontroller on %s.%s (%s)"
+                % (req["port"], " " + tail if tail else "", hint)
             )
         self._done("detect", chip)
         req["chip"] = chip
@@ -819,15 +910,20 @@ class FlashJob:
             self._done("write", binary.name)
             return str(volume)
         write = esptool_cmd("write_flash", self.runner)
+        # --after hard-reset matters on native-USB chips: without it the board
+        # stays in the ROM downloader after the write and MicroPython never
+        # starts, so the boot wait below times out on a perfectly good flash.
         cmd = self._esptool() + [
             "--port", req["port"], "--baud", str(req.get("baud") or DEFAULT_BAUD),
+            "--after", "hard-reset",
             write, "0", str(binary),
         ]
         code = self._run(cmd, "write", timeout=420.0, percent=True)
         if code != 0:
             # A slower link is the usual cause of a checksum failure.
             self.emit("warn", "write failed; retrying at the default baud rate", "write")
-            cmd = self._esptool() + ["--port", req["port"], write, "0", str(binary)]
+            cmd = self._esptool() + ["--port", req["port"], "--after", "hard-reset",
+                                     write, "0", str(binary)]
             code = self._run(cmd, "write", timeout=600.0, percent=True)
         if code != 0:
             raise FlashError("esptool could not write the firmware (exit %d)" % code)
@@ -837,32 +933,41 @@ class FlashJob:
     def _step_boot(self, port: str) -> str:
         """Wait for the MicroPython REPL and return its serial port.
 
-        After a UF2 write the bootloader volume unmounts and the board comes
-        back as a serial port (a different device name), so the drive path must
-        never be handed to mpremote.
+        After a flash the board re-enumerates (a UF2 volume is replaced by a
+        serial port, an ESP32 may change COM number), so the port is re-scanned
+        every round.  Each mpremote attempt uses a short timeout: a long one
+        burns the whole budget on a board that is still booting, which is why
+        this used to give up after two tries.
         """
         self._begin("boot", "waiting for the MicroPython prompt")
-        timeout = 60 if self.kind == "uf2" else 40
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + 90
         candidate = "" if self.kind == "uf2" else port
         while time.monotonic() < deadline:
-            if candidate:
+            # Re-scan: the board re-enumerates under a new name after a flash.
+            fresh = find_serial_port_like(port)
+            if fresh and fresh != candidate:
+                candidate = fresh
+                self.emit("info", "board appeared on %s" % candidate, "boot")
+            available = {p["device"] for p in list_ports()
+                         if p.get("kind", "serial") == "serial"}
+            if candidate and candidate in available:
+                # Short timeout: a board that is still booting would otherwise
+                # eat the whole budget in one call.  Never run esptool here --
+                # on a native-USB board it blocks and cannot reset anything.
                 code, output = self.runner.capture(
-                    self._mpremote() + ["connect", candidate, "exec", "print('MPY-READY')"],
-                    timeout=20,
+                    self._mpremote() + ["connect", candidate, "exec",
+                                        "print('MPY-READY')"],
+                    timeout=8,
                 )
                 if code == 0 and "MPY-READY" in output:
                     self._done("boot", "port " + candidate)
                     return candidate
-            # Re-scan: the board re-enumerates after either flash method.
-            other = find_serial_port_like(port)
-            if other and other != candidate:
-                candidate = other
-                self.emit("info", "board appeared on %s" % candidate, "boot")
-            time.sleep(2)
+            time.sleep(1.5)
         raise FlashError(
-            "the board was flashed but MicroPython did not start. Unplug and "
-            "replug it, then run the flasher again."
+            "the firmware was written and verified, but MicroPython is not "
+            "answering on %s. Unplug the USB cable, wait 5 seconds and plug it "
+            "back in, then use \"Update Settings Only\" -- the board already has "
+            "valid firmware." % port
         )
 
     def _step_files(self, port: str) -> None:
@@ -934,20 +1039,72 @@ class FlashJob:
         self._begin("verify", req.get("server", ""))
         deadline = time.monotonic() + 45
         uid = req["device_uid"]
+        mismatch = ""
         while time.monotonic() < deadline:
             found = _hub_has_device(req.get("server", ""), uid, req.get("token", ""),
                                     req.get("hub_username", ""), req.get("hub_password", ""))
             if found:
                 self._done("verify", "seen on the hub")
                 return
+            # Ask the board what network it actually joined: a board that is
+            # "connected" but on another subnet can never reach the hub, and
+            # that is worth saying explicitly rather than leaving the user to
+            # guess from a timeout.
+            if not mismatch:
+                mismatch = self._network_mismatch(req)
+                if mismatch:
+                    self.emit("error", mismatch, "verify")
             time.sleep(3)
         # Not fatal: the board may still be joining Wi-Fi.
         step = self.steps["verify"]
         step.state = "done"
         step.finished = time.time()
+        if mismatch:
+            step.detail = "wrong network - see the message above"
+            self.emit("warn", mismatch, "verify")
+            return
         step.detail = "not seen yet - check the board's serial console"
         self.emit("warn", "the board did not appear on the hub within 45s; "
                           "check Wi-Fi credentials or the serial console", "verify")
+
+    def _network_mismatch(self, req: Dict[str, Any]) -> str:
+        """Compare the board's subnet with the hub's, if we can ask it."""
+        try:
+            code, output = self.runner.capture(
+                self._mpremote() + [
+                    "connect", str(req["port"]), "exec",
+                    "import network;w=network.WLAN(network.STA_IF);"
+                    "print('NET', w.isconnected(), w.ifconfig())",
+                ],
+                timeout=20,
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+        if code != 0 or "NET" not in output:
+            return ""
+        match = re.search(r"NET\s+\w+\s+\(([^)]*)\)", output)
+        if not match:
+            return ""
+        parts = [piece.strip().strip("'\"") for piece in match.group(1).split(",")]
+        if not parts:
+            return ""
+        board_ip = parts[0]
+        gateway = parts[2] if len(parts) > 2 else ""
+        server = str(req.get("server") or "")
+        host = re.sub(r"^https?://", "", server).split(":")[0].split("/")[0]
+        if not board_ip or board_ip.startswith("0."):
+            return ("the board has no IP address - it did not join Wi-Fi. Check "
+                    "the SSID and password (and that the network is 2.4 GHz).")
+        if host and board_ip.count(".") == 3 and host.count(".") == 3:
+            board_net = ".".join(board_ip.split(".")[:3])
+            hub_net = ".".join(host.split(".")[:3])
+            if board_net != hub_net:
+                return ("the board joined a different network: it is on %s "
+                        "(gateway %s) but the hub is on %s. They must be on the "
+                        "same subnet - check the Wi-Fi SSID, or that the board "
+                        "is not stuck on its own access point."
+                        % (board_ip, gateway or "unknown", hub_net + ".x"))
+        return ""
 
     # -- state ----------------------------------------------------------- #
     def state(self) -> Dict[str, Any]:
@@ -1070,6 +1227,22 @@ def create_app(jobs: Optional[Dict[str, FlashJob]] = None, runner: Optional[Runn
         )
         chip = parse_chip(output)
         micropython = False
+        if not chip:
+            # esptool cannot drive a board that is already running MicroPython,
+            # so report that case specifically instead of "port busy".
+            code2, out2 = detect_runner.capture(
+                [sys.executable, "-m", "mpremote", "connect", port, "exec", "print('MPY')"],
+                timeout=25,
+            )
+            if code2 == 0 and "MPY" in out2:
+                micropython = True
+                return {
+                    "port": port, "kind": "serial", "chip": None,
+                    "micropython": True, "ok": True, "output": "",
+                    "notice": "MicroPython is already running on this board. "
+                              "Flashing will restart it into the bootloader "
+                              "automatically.",
+                }
         if chip:
             code2, out2 = detect_runner.capture(
                 [sys.executable, "-m", "mpremote", "connect", port, "exec", "print('MPY')"],
@@ -1084,6 +1257,107 @@ def create_app(jobs: Optional[Dict[str, FlashJob]] = None, runner: Optional[Runn
             "ok": bool(chip),
             "output": "\n".join(output.strip().splitlines()[-6:]) if not chip else "",
         }
+
+    @app.post("/api/configure")
+    async def configure(body: Dict[str, Any]):
+        """Rewrite config.json/devices.json on a board already running MicroPython.
+
+        No erase, no firmware download: the two JSON files are replaced over the
+        existing session and the board reboots.  This is the fix for a working
+        board that joined the wrong network or needs new device settings.
+        """
+        body = body or {}
+        port = str(body.get("port") or "").strip()
+        if not port:
+            return JSONResponse({"error": "select a serial port"}, status_code=400)
+        if board_kind(port) == "uf2":
+            return JSONResponse(
+                {"error": "that is a BOOTSEL drive; configure a board that is "
+                          "running MicroPython, or flash it first"},
+                status_code=400,
+            )
+        try:
+            problem = _validate_request(body)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if problem:
+            return JSONResponse({"error": problem}, status_code=400)
+
+        configure_runner = runner or Runner()
+        code, output = configure_runner.capture(
+            [sys.executable, "-m", "mpremote", "connect", port, "exec", "print('MPY')"],
+            timeout=25,
+        )
+        if code != 0 or "MPY" not in output:
+            return JSONResponse(
+                {"error": "no MicroPython running on %s. Unplug the USB cable, "
+                          "wait a few seconds, plug it back in, then try again."
+                          % port},
+                status_code=400,
+            )
+
+        config = {
+            "wifi_ssid": body.get("wifi_ssid", ""),
+            "wifi_pass": body.get("wifi_pass", ""),
+            "server": str(body.get("server", "")).rstrip("/"),
+            "node_id": body.get("node_id") or "",
+            "token": body.get("token") or "",
+            "heartbeat_s": 10,
+            "report_s": 30,
+        }
+        devices = [{
+            "type": body["device_type"],
+            "uid": body["device_uid"],
+            "name": body.get("device_name") or body["device_uid"],
+            "config": body.get("device_config") or {},
+        }]
+
+        # Never blank an existing token.  The form has no token field -- only a
+        # flash job resolves one -- so writing "" here would lock the board out
+        # of the hub, which is exactly what happened once.
+        if not config["token"]:
+            code, existing = configure_runner.capture(
+                [sys.executable, "-m", "mpremote", "connect", port, "exec",
+                 "import json;print('TOK',json.load(open('/config.json')).get('token',''))"],
+                timeout=25,
+            )
+            if code == 0 and "TOK" in existing:
+                line = [piece for piece in existing.splitlines() if "TOK" in piece][0]
+                previous = line.split("TOK", 1)[1].strip().strip("'\"")
+                if previous:
+                    config["token"] = previous
+                    job_token_note = "kept the token already on the board"
+                else:
+                    job_token_note = ""
+            else:
+                job_token_note = ""
+        else:
+            job_token_note = "used the token from the request"
+
+        staging = Path(tempfile.mkdtemp(prefix="shcfg-"))
+        try:
+            for name, payload in (("config.json", config), ("devices.json", devices)):
+                local = staging / name
+                local.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                code, out = configure_runner.capture(
+                    [sys.executable, "-m", "mpremote", "connect", port,
+                     "fs", "cp", str(local), ":" + name],
+                    timeout=120,
+                )
+                if code != 0:
+                    return JSONResponse(
+                        {"error": "could not write %s: %s" % (name, out.strip()[-200:])},
+                        status_code=500,
+                    )
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+        configure_runner.capture(
+            [sys.executable, "-m", "mpremote", "connect", port, "reset"],
+            timeout=30,
+        )
+        return {"ok": True, "port": port, "node_id": config["node_id"],
+                "token": bool(config["token"]), "token_note": job_token_note}
 
     @app.post("/api/flash")
     async def flash(body: Dict[str, Any]):

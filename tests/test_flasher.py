@@ -466,3 +466,70 @@ class _NullRunner:
         if "exec" in joined:
             return 0, "MPY-READY"
         return 0, ""
+
+
+# --------------------------------------------------------------------------- #
+# recovering a board that is already running MicroPython
+# --------------------------------------------------------------------------- #
+class BootloaderRunner:
+    """A board that answers MicroPython until asked to enter the bootloader."""
+
+    def __init__(self, ever_enters=True):
+        self.calls = []
+        self.kicked = False
+        self.ever_enters = ever_enters
+
+    def run(self, cmd, on_line=None, timeout=300.0):
+        self.calls.append(" ".join(cmd))
+        return 0
+
+    def capture(self, cmd, timeout=60.0):
+        joined = " ".join(cmd)
+        self.calls.append(joined)
+        if "flash_id" in joined or "flash-id" in joined:
+            if self.kicked:
+                return 0, "Chip is ESP32-C6 (QFN40)"
+            return 1, "Could not open COM7, the port is busy"
+        if "bootloader" in joined:
+            if self.ever_enters:
+                self.kicked = True
+            return 0, ""
+        return 0, "MPY"
+
+
+def test_detect_restarts_a_board_running_micropython(firmware_file):
+    """A working board must not need someone to hold BOOT by hand."""
+    runner = BootloaderRunner()
+    job = make_job(runner)
+    job._step_detect(job.request)
+
+    assert job.request["chip"] == "ESP32-C6"
+    assert runner.kicked, "machine.bootloader() should have been issued"
+    assert job.steps["detect"].state == "done"
+    assert any("running MicroPython" in entry["text"] for entry in job.log)
+
+
+def test_detect_reports_a_board_that_will_not_enter_the_bootloader(firmware_file):
+    runner = BootloaderRunner(ever_enters=False)
+    job = make_job(runner)
+    with pytest.raises(flasher.FlashError) as excinfo:
+        job._step_detect(job.request)
+    message = str(excinfo.value)
+    assert "could not talk to a microcontroller" in message
+    assert "hold BOOT" in message
+    # The useful part of esptool's own error is kept.
+    assert "port is busy" in message
+
+
+def test_probe_explains_a_board_running_micropython():
+    """Check board reports "MicroPython running" rather than "port busy"."""
+    runner = BootloaderRunner(ever_enters=False)
+    app = flasher.create_app(runner=runner)
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    payload = client.post("/api/probe", json={"port": "COM7"}).json()
+    assert payload["ok"] is True
+    assert payload["micropython"] is True
+    assert payload["chip"] is None
+    assert "bootloader" in payload["notice"].lower()
